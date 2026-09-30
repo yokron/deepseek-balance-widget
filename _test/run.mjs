@@ -369,14 +369,14 @@ await check("中号/大号在有消费时画折线图（默认）", async () => 
   if (ops.includes("roundedRect")) throw new Error("默认不该是柱状: " + ops.join(","));
   if (!ops.includes("move")) throw new Error("折线缺少路径");
   const t = textsOf(script._widget).join(" | ");
-  if (!/13 周/.test(t)) throw new Error("缺少图表说明: " + t);
+  if (!/近 30 天/.test(t)) throw new Error("缺少图表说明: " + t);
   if (!/合计/.test(t)) throw new Error("说明里没有合计: " + t);
   config.widgetFamily = "medium"; script._widget = null;
   await mod.main();
   if (imgsOf(script._widget).length !== 1) throw new Error("中号没有图形");
 });
 
-await check("按周聚合成一个季度（13 周）", async () => {
+await check("近 30 天窗口：窗口内的计入、窗口外的排除", async () => {
   reset();
   store.set(KC("default"), "sk-test-123");
   const dayMs = 86400000;
@@ -385,21 +385,21 @@ await check("按周聚合成一个季度（13 周）", async () => {
     const p = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   };
-  // 今天消费 3、3 天前 1（同一周 → 4），8 天前 2（上一周）
+  // 今天 3.00 + 3 天前 1.00 在 30 天窗口内（合计 4.00）；40 天前的 5.00 必须被排除
   files.set(HISTORY, JSON.stringify({
     default: {
       samples: [],
-      ledger: { CNY: { consume: 6, recharge: 0, since: Date.now() - 10 * dayMs, last: { t: Date.now(), v: 110 } } },
-      daily: { CNY: { [k(0)]: 3, [k(3)]: 1, [k(8)]: 2 } },
+      ledger: { CNY: { consume: 6, recharge: 0, since: Date.now() - 45 * dayMs, last: { t: Date.now(), v: 110 } } },
+      daily: { CNY: { [k(0)]: 3, [k(3)]: 1, [k(40)]: 5 } },
     },
   }));
   args.widgetParameter = null;
   config.runsInWidget = true; config.widgetFamily = "large";
   await mod.main();
   const t = textsOf(script._widget).join(" | ");
-  if (!/13 周/.test(t)) throw new Error("caption 没有跨度: " + t);
-  if (!/合计 6\.00/.test(t)) throw new Error("周合计应为 6.00: " + t);
-  if (!/单周最高 4\.00/.test(t)) throw new Error("单周最高应为 4.00: " + t);
+  if (!/近 30 天/.test(t)) throw new Error("caption 没有跨度: " + t);
+  if (!/合计 4\.00/.test(t)) throw new Error("窗口合计应为 4.00（40 天前那 5.00 要排除）: " + t);
+  if (!/单日最高 3\.00/.test(t)) throw new Error("单日最高应为 3.00: " + t);
 });
 
 await check("参数写 bar 时改用直方图", async () => {

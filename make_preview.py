@@ -59,10 +59,11 @@ def spend_line(x0, y0, x1, y1, values, color=BRAND, fill=BRAND_SOFT):
     d.ellipse((px - 6, py - 6, px + 6, py + 6), fill=color)
 
 
-# 13 周 ≈ 一个季度（按周聚合的消费）
-WEEKLY = [0.8, 1.2, 0.5, 0.0, 2.1, 1.4, 0.9, 3.2, 1.1, 0.6, 0.4, 1.8, 2.4]
-LIVE = [("充值", "100.00", TEXT), ("累计消费", "12.40", WARN)]
-LIVE_S = [("充值", "100.00", TEXT), ("累计消费", "12.40", WARN)]
+# 近 30 天的每日消费（示例数据，合计 21.46、单日最高 1.86）
+DAILY = [0.3, 0.8, 0.5, 0.0, 1.2, 0.9, 0.4, 0.0, 0.6, 1.4, 1.1, 0.2, 0.0, 0.7, 1.6,
+         1.86, 0.9, 0.5, 0.0, 1.3, 0.8, 0.4, 1.1, 0.6, 0.0, 0.9, 1.2, 0.7, 1.0, 0.5]
+LIVE = [("充值", "100.00", TEXT), ("累计消费", "22.60", WARN)]
+LIVE_S = [("充值", "100.00", TEXT), ("累计消费", "22.60", WARN)]
 
 # ---------------- 大号 ----------------
 x0, y0, x1, y1 = 80, 130, 740, 560
@@ -70,8 +71,8 @@ card((x0, y0, x1, y1))
 header(x0 + 34, y0 + 32, "DeepSeek 余额")
 big_amount(x0 + 34, y0 + 60, "CNY", "110.00", 74)
 columns(x0 + 34, y0 + 162, LIVE)
-spend_line(x0 + 40, y0 + 246, x0 + 620, y0 + 318, WEEKLY)
-d.text((x0 + 34, y0 + 334), "近 13 周（约一季度）· 合计 16.40 · 单周最高 3.20", font=f(MSYH, 20), fill=DIM)
+spend_line(x0 + 40, y0 + 246, x0 + 620, y0 + 318, DAILY)
+d.text((x0 + 34, y0 + 334), "近 30 天 · 合计 21.46 · 单日最高 1.86", font=f(MSYH, 20), fill=DIM)
 d.text((x0 + 34, y0 + 358), "消费记录自 09-30 14:20 起累计（接口不提供历史账单）", font=f(MSYH, 18), fill=(110, 116, 132))
 d.text((x0 + 34, y1 - 40), "更新 6 分钟前", font=f(MSYH, 20), fill=DIM)
 
@@ -81,7 +82,7 @@ card((mx0, my0, mx1, my1), radius=40)
 header(mx0 + 30, my0 + 18, "DeepSeek 余额", small=True)
 big_amount(mx0 + 30, my0 + 48, "CNY", "110.00", 54)
 columns(mx0 + 420, my0 + 52, LIVE)
-spend_line(mx0 + 360, my0 + 106, mx0 + 620, my0 + 130, WEEKLY)
+spend_line(mx0 + 360, my0 + 106, mx0 + 620, my0 + 130, DAILY)
 d.text((mx0 + 30, my1 - 34), "更新 6 分钟前", font=f(MSYH, 18), fill=DIM)
 
 # ---------------- 小号（实时） ----------------
@@ -97,7 +98,7 @@ ox0, oy0, ox1, oy1 = 800, 440, 1080, 720
 card((ox0, oy0, ox1, oy1))
 header(ox0 + 28, oy0 + 22, "DeepSeek", dot=WARN, small=True)
 big_amount(ox0 + 28, oy0 + 60, "CNY", "110.00", 52, color=(170, 174, 186))
-columns(ox0 + 28, oy0 + 150, [("充值", "100.00", (170, 174, 186)), ("累计消费", "12.40", (150, 130, 90))])
+columns(ox0 + 28, oy0 + 150, [("充值", "100.00", (170, 174, 186)), ("累计消费", "22.60", (150, 130, 90))])
 d.text((ox0 + 28, oy1 - 64), "离线数据 · 3 小时前", font=f(MSYH, 17), fill=DIM)
 d.ellipse((ox0 + 30, oy1 - 34, ox0 + 40, oy1 - 24), fill=WARN)
 d.text((ox0 + 48, oy1 - 40), "网络不可用或请求超时", font=f(MSYH, 16), fill=WARN)
