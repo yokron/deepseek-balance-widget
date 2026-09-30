@@ -17,6 +17,7 @@
 | [_test/run.mjs](_test/run.mjs) | 开发用：在电脑上模拟 Scriptable 运行环境做回归测试 |
 | [_transfer/serve.mjs](_transfer/serve.mjs) | 局域网静态服务，手机同 Wi-Fi 打开安装页 |
 | [_transfer/gh.mjs](_transfer/gh.mjs) | 没装 `gh` CLI 时用它建仓库 / 开 Pages（走 REST API） |
+| [_transfer/pin-proxy.mjs](_transfer/pin-proxy.mjs) | 网络阻断 `github.com` 时，用固定 IP 代理完成 push |
 
 ---
 
@@ -194,6 +195,17 @@ pwsh -ExecutionPolicy Bypass -File .\push-to-github.ps1 -User 你的用户名 -R
 git remote add origin https://github.com/<用户名>/<仓库>.git
 git push -u origin main
 ```
+
+#### 如果 `git push` 报 Could not connect to server
+
+国内网络下 `github.com` 常被解析到已被阻断的 IP（例如 `20.205.243.166`），而 GitHub 的美国 IP 其实是通的。用仓库里的固定 IP 代理绕过：
+
+```powershell
+node _transfer/pin-proxy.mjs          # 另开一个窗口，监听 127.0.0.1:9443
+git -c http.proxy=http://127.0.0.1:9443 push -u origin main
+```
+
+它只把 `github.com / api.github.com / codeload / ssh` 的 CONNECT 转到可用 IP，TLS 依旧端到端（SNI 与证书校验不变）。`raw.githubusercontent.com` 一般不受影响，所以**读一直正常、只有 push 失败**是典型症状。
 
 ### 开启 Pages
 
