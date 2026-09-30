@@ -19,6 +19,7 @@ const KC_PREFIX = "deepseek.balance.apikey.";
 const DEFAULT_ALIAS = "default";
 const CACHE_FILE = "deepseek-balance-cache.json";
 const HISTORY_FILE = "deepseek-balance-history.json";
+const USAGE_FILE = "deepseek-usage-cache.json";
 const HISTORY_LIMIT = 96;
 const DAILY_KEEP = 60;
 
@@ -103,11 +104,12 @@ function writeJSON(path, obj) {
 
 const cachePath = () => fm().joinPath(fm().documentsDirectory(), CACHE_FILE);
 const historyPath = () => fm().joinPath(fm().documentsDirectory(), HISTORY_FILE);
+const usagePath = () => fm().joinPath(fm().documentsDirectory(), USAGE_FILE);
 
 // ---------------------------------------------------------------- 参数 / Key
 
 function parseParams(raw) {
-  const out = { alias: DEFAULT_ALIAS, currency: null, inlineKey: null };
+  const out = { alias: DEFAULT_ALIAS, currency: null, inlineKey: null, usageUrl: null };
   const s = (raw == null ? "" : String(raw)).trim();
   if (!s) return out;
   if (s.indexOf("sk-") === 0) {
@@ -115,8 +117,12 @@ function parseParams(raw) {
     return out;
   }
   const parts = s.split("|").map((x) => x.trim()).filter((x) => x.length > 0);
-  if (parts[0]) out.alias = parts[0];
-  if (parts[1]) out.currency = parts[1].toUpperCase();
+  // 任意一段是 http(s) 链接就当成 token 用量 JSON 的地址（第 3 段）
+  const urlPart = parts.find((p) => /^https?:\/\//i.test(p));
+  if (urlPart) out.usageUrl = urlPart;
+  const positional = parts.filter((p) => !/^https?:\/\//i.test(p));
+  if (positional[0]) out.alias = positional[0];
+  if (positional[1]) out.currency = positional[1].toUpperCase();
   return out;
 }
 
@@ -334,6 +340,69 @@ function dailySeries(rec, currency, days) {
     out.push({ day: k, label: k.slice(5), value: map[k] || 0 });
   }
   return out;
+}
+
+// ---------------------------------------------------------------- token 用量
+//
+// 手机端拿不到 token 数：官方没有用量接口，usage 只存在于「发起请求的那一方」，
+// 而调用是电脑上的 DSH 发出的。所以电脑端（_transfer/usage-stats.mjs）统计好、
+// 发布成一份 JSON（私密 Gist 或仓库），小组件按小组件参数里给的 URL 去读，
+// 并在本地缓存一份供离线/失败时使用。
+
+async function fetchUsage(url) {
+  const req = new Request(url);
+  req.method = "GET";
+  req.timeoutInterval = 20;
+  req.headers = { Accept: "application/json", "Cache-Control": "no-cache" };
+  let body = "";
+  let status = 0;
+  try {
+    body = await req.loadString();
+    status = req.response ? req.response.statusCode : 200;
+  } catch (e) {
+    return null;
+  }
+  if (status !== 200) return null;
+  try {
+    const j = JSON.parse(body);
+    if (!j || !j.totals || !Array.isArray(j.daily)) return null;
+    return j;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveUsageCache(url, data) {
+  writeJSON(usagePath(), { url, data });
+}
+
+function loadUsageCache(url) {
+  const c = readJSON(usagePath(), null);
+  if (c && c.data && (!url || c.url === url)) return c.data;
+  return null;
+}
+
+async function resolveUsage(url) {
+  if (!url) return null;
+  const fresh = await fetchUsage(url);
+  if (fresh) {
+    saveUsageCache(url, fresh);
+    return fresh;
+  }
+  return loadUsageCache(url);
+}
+
+function fmtTokens(n) {
+  const v = Number(n) || 0;
+  if (v >= 1e8) return (v / 1e8).toFixed(2) + "亿";
+  if (v >= 1e4) return (v / 1e4).toFixed(1) + "万";
+  return String(Math.round(v));
+}
+
+function usageToday(usage) {
+  if (!usage || !Array.isArray(usage.daily) || !usage.daily.length) return null;
+  const key = dayKey(Date.now());
+  return usage.daily.find((d) => d.day === key) || usage.daily[usage.daily.length - 1];
 }
 
 // ---------------------------------------------------------------- 数据准备
@@ -623,6 +692,31 @@ function buildWidget(state, family) {
     o.lineLimit = 1;
   }
 
+  // token 用量（数据来自电脑端发布，见文件头注释）
+  if (state.usage) {
+    const t = usageToday(state.usage);
+    if (t) {
+      w.addSpacer(isSmall ? 4 : 6);
+      const line = w.addText("今日 " + fmtTokens(t.total) + " tok · ¥" + t.cost.toFixed(2));
+      line.font = mono(isSmall ? 10 : 11, false);
+      line.textColor = C.text;
+      line.lineLimit = 1;
+      line.minimumScaleFactor = 0.7;
+
+      if (isLarge) {
+        w.addSpacer(2);
+        const sub = w.addText(
+          "近 " + state.usage.days + " 天 " + fmtTokens(state.usage.totals.total) + " tok · ¥" +
+            state.usage.totals.cost.toFixed(2) + " · 数据 " + relTime(state.usage.generatedAt)
+        );
+        sub.font = Font.systemFont(9);
+        sub.textColor = C.dim;
+        sub.lineLimit = 1;
+        sub.minimumScaleFactor = 0.7;
+      }
+    }
+  }
+
   // 消费折线图（中号 / 大号）。数据来自本机采样：余额下降即消费。
   if (!isSmall && state.rec) {
     const days = isLarge ? 14 : 10;
@@ -687,15 +781,28 @@ function detailText(state) {
   });
   lines.push("抓取时间：" + clockTime(state.data.fetchedAt) + "（" + relTime(state.data.fetchedAt) + "）");
   lines.push("累计消费由余额变化推算（接口不提供用量数据）");
+
+  if (state.usage) {
+    const t = usageToday(state.usage);
+    lines.push("");
+    lines.push("[DSH 本地统计的 token 用量]");
+    lines.push("  今日：" + fmtTokens(t ? t.total : 0) + " tok · 约 ¥" + (t ? t.cost.toFixed(2) : "0.00"));
+    lines.push("  近 " + state.usage.days + " 天：" + fmtTokens(state.usage.totals.total) + " tok · 约 ¥" + state.usage.totals.cost.toFixed(2));
+    lines.push("  请求 " + state.usage.totals.calls + " 次 · 数据 " + relTime(state.usage.generatedAt));
+  } else {
+    lines.push("");
+    lines.push("token 用量：未配置数据源（小组件参数第 3 段填 JSON 地址）");
+  }
   return lines.join("\n");
 }
 
-async function runInApp(initialAlias) {
+async function runInApp(initialAlias, usageUrl) {
   let alias = initialAlias;
   const fam = Device.screenSize().width > 400 ? "medium" : "small";
 
   for (;;) {
     const state = await resolveState(alias, null);
+    state.usage = await resolveUsage(usageUrl);
     const hasKey = !!storedKey(alias);
 
     const a = new Alert();
@@ -772,12 +879,13 @@ async function main() {
   if (params.inlineKey) Keychain.set(keychainKey(alias), params.inlineKey);
 
   if (!config.runsInWidget) {
-    await runInApp(alias);
+    await runInApp(alias, params.usageUrl);
     return;
   }
 
   const family = config.widgetFamily || "small";
   const state = await resolveState(alias, params.currency);
+  state.usage = await resolveUsage(params.usageUrl);
   const w = buildWidget(state, family);
   Script.setWidget(w);
   Script.complete();

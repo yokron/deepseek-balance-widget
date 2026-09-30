@@ -60,7 +60,24 @@ const SAMPLE = {
 
 let nextStatus = 200;
 let requestCount = 0;
+let usageFails = false;
 const log = [];
+
+const todayKey = (() => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+})();
+
+const USAGE_SAMPLE = {
+  generatedAt: Date.now(),
+  days: 14,
+  totals: { cacheMiss: 1755130, cacheHit: 172790144, output: 1099857, total: 175645131, cost: 17.4862, calls: 1068 },
+  daily: [
+    { day: "2026-09-28", cacheMiss: 548179, cacheHit: 52860288, output: 371834, total: 53780301, cost: 5.3609, calls: 438 },
+    { day: todayKey, cacheMiss: 1194253, cacheHit: 111839744, output: 710547, total: 113744544, cost: 11.6365, calls: 606 },
+  ],
+};
 
 class ColorImpl {
   constructor(hex, alpha) {
@@ -168,8 +185,12 @@ class RequestImpl {
     return strict(this, "Request");
   }
   async loadString() {
-    requestCount++;
     log.push("GET " + this.url + " status=" + nextStatus);
+    if (/usage/i.test(this.url)) {
+      if (usageFails) throw new Error("network down");
+      return JSON.stringify(USAGE_SAMPLE);
+    }
+    requestCount++;
     if (nextStatus === 0) throw new Error("network down");
     if (nextStatus === 401) return JSON.stringify({ error: { message: "Authentication Fails" } });
     return JSON.stringify(SAMPLE);
@@ -399,6 +420,40 @@ await check("旧版历史（纯数组）自动迁移并接上基准", async () =
   if (Array.isArray(rec)) throw new Error("未迁移成新结构");
   const c = rec.ledger.CNY.consume;
   if (Math.abs(c - 5) > 1e-6) throw new Error("迁移后应把 50→45 记为消费 5，实际 " + c);
+});
+
+await check("参数第 3 段的 usage URL 生效并显示今日 token", async () => {
+  reset({ key: "sk-test-123" });
+  args.widgetParameter = "default|CNY|https://example.com/deepseek-usage.json";
+  config.runsInWidget = true; config.widgetFamily = "large";
+  await mod.main();
+  const t = textsOf(script._widget).join(" | ");
+  if (!/今日 1\.14亿 tok · ¥11\.64/.test(t)) throw new Error("今日 token 行不对: " + t);
+  if (!/近 14 天 1\.76亿 tok · ¥17\.49/.test(t)) throw new Error("近 14 天行缺失: " + t);
+  const cached = JSON.parse(files.get("/mock/Documents/deepseek-usage-cache.json"));
+  if (!cached || !cached.data || cached.data.totals.total !== 175645131) throw new Error("usage 未落缓存");
+});
+
+await check("usage 拉取失败时回退本地缓存", async () => {
+  reset({ key: "sk-test-123" });
+  args.widgetParameter = "https://example.com/deepseek-usage.json";
+  config.runsInWidget = true; config.widgetFamily = "medium";
+  await mod.main();                                   // 先成功一次
+  usageFails = true;
+  script._widget = null;
+  await mod.main();                                   // 再失败
+  const t = textsOf(script._widget).join(" | ");
+  if (!/今日/.test(t)) throw new Error("未回退到缓存: " + t);
+  usageFails = false;
+});
+
+await check("未配置 usage URL 时不显示 token 行", async () => {
+  reset({ key: "sk-test-123" });
+  args.widgetParameter = null;
+  config.runsInWidget = true; config.widgetFamily = "large";
+  await mod.main();
+  const t = textsOf(script._widget).join(" | ");
+  if (/tok/.test(t)) throw new Error("不该出现 token 行: " + t);
 });
 
 await check("App 内：无 Key 时能设置 Key（真机崩溃路径）", async () => {
