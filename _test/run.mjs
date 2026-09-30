@@ -368,11 +368,37 @@ await check("中号/大号在有消费时画直方图（默认）", async () => 
   const ops = imgs[0].paths.flatMap((p) => p.ops.map((o) => o[0]));
   if (!ops.includes("roundedRect") && !ops.includes("rect")) throw new Error("没有柱子: " + ops.join(","));
   const t = textsOf(script._widget).join(" | ");
-  if (!/每日消费/.test(t)) throw new Error("缺少图表说明: " + t);
+  if (!/13 周/.test(t)) throw new Error("缺少图表说明: " + t);
   if (!/合计/.test(t)) throw new Error("说明里没有合计: " + t);
   config.widgetFamily = "medium"; script._widget = null;
   await mod.main();
   if (imgsOf(script._widget).length !== 1) throw new Error("中号没有图形");
+});
+
+await check("按周聚合成一个季度（13 周）", async () => {
+  reset();
+  store.set(KC("default"), "sk-test-123");
+  const dayMs = 86400000;
+  const k = (off) => {
+    const d = new Date(Date.now() - off * dayMs);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+  // 今天消费 3、3 天前 1（同一周 → 4），8 天前 2（上一周）
+  files.set(HISTORY, JSON.stringify({
+    default: {
+      samples: [],
+      ledger: { CNY: { consume: 6, recharge: 0, since: Date.now() - 10 * dayMs, last: { t: Date.now(), v: 110 } } },
+      daily: { CNY: { [k(0)]: 3, [k(3)]: 1, [k(8)]: 2 } },
+    },
+  }));
+  args.widgetParameter = null;
+  config.runsInWidget = true; config.widgetFamily = "large";
+  await mod.main();
+  const t = textsOf(script._widget).join(" | ");
+  if (!/13 周/.test(t)) throw new Error("caption 没有跨度: " + t);
+  if (!/合计 6\.00/.test(t)) throw new Error("周合计应为 6.00: " + t);
+  if (!/单周最高 4\.00/.test(t)) throw new Error("单周最高应为 4.00: " + t);
 });
 
 await check("参数写 line 时改用折线图", async () => {

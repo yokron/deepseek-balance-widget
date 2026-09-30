@@ -61,7 +61,8 @@ def spend_bars(x0, y0, x1, y1, values, color=BRAND, mid=(58, 74, 132), faint=(38
     d.line([(x0, y1 + 1), (x1, y1 + 1)], fill=faint, width=1)
 
 
-SPEND = [0.4, 1.1, 0.8, 1.9, 1.4, 0.6, 0.2, 1.2, 1.7, 0.9, 1.3, 0.7, 1.5, 1.86]
+# 13 周 ≈ 一个季度（按周聚合的消费）
+WEEKLY = [0.8, 1.2, 0.5, 0.0, 2.1, 1.4, 0.9, 3.2, 1.1, 0.6, 0.4, 1.8, 2.4]
 LIVE = [("充值", "100.00", TEXT), ("累计消费", "12.40", WARN)]
 LIVE_S = [("充值", "100.00", TEXT), ("累计消费", "12.40", WARN)]
 
@@ -71,9 +72,10 @@ card((x0, y0, x1, y1))
 header(x0 + 34, y0 + 32, "DeepSeek 余额")
 big_amount(x0 + 34, y0 + 60, "CNY", "110.00", 74)
 columns(x0 + 34, y0 + 162, LIVE)
-spend_bars(x0 + 40, y0 + 250, x0 + 620, y0 + 330, SPEND)
-d.text((x0 + 34, y0 + 344), "近 14 天每日消费 · 最高 1.86 · 合计 12.40", font=f(MSYH, 20), fill=DIM)
-d.text((x0 + 34, y1 - 44), "更新 6 分钟前", font=f(MSYH, 20), fill=DIM)
+spend_bars(x0 + 40, y0 + 240, x0 + 620, y0 + 320, WEEKLY)
+d.text((x0 + 34, y0 + 334), "近 13 周（约一季度）· 合计 16.40 · 单周最高 3.20", font=f(MSYH, 20), fill=DIM)
+d.text((x0 + 34, y0 + 358), "消费记录自 09-30 14:20 起累计（接口不提供历史账单）", font=f(MSYH, 18), fill=(110, 116, 132))
+d.text((x0 + 34, y1 - 40), "更新 6 分钟前", font=f(MSYH, 20), fill=DIM)
 
 # ---------------- 中号 ----------------
 mx0, my0, mx1, my1 = 80, 600, 740, 780
@@ -81,7 +83,7 @@ card((mx0, my0, mx1, my1), radius=40)
 header(mx0 + 30, my0 + 18, "DeepSeek 余额", small=True)
 big_amount(mx0 + 30, my0 + 48, "CNY", "110.00", 54)
 columns(mx0 + 420, my0 + 52, LIVE)
-spend_bars(mx0 + 380, my0 + 106, mx0 + 620, my0 + 132, SPEND[-10:])
+spend_bars(mx0 + 360, my0 + 106, mx0 + 620, my0 + 132, WEEKLY)
 d.text((mx0 + 30, my1 - 34), "更新 6 分钟前", font=f(MSYH, 18), fill=DIM)
 
 # ---------------- 小号（实时） ----------------

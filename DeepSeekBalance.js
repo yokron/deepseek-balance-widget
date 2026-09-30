@@ -21,7 +21,8 @@ const DEFAULT_ALIAS = "default";
 const CACHE_FILE = "deepseek-balance-cache.json";
 const HISTORY_FILE = "deepseek-balance-history.json";
 const HISTORY_LIMIT = 96;
-const DAILY_KEEP = 60;
+const DAILY_KEEP = 130;      // 保留约一个季度多一点点的每日消费，够 13 周聚合
+const CHART_WEEKS = 13;      // 消费图跨度：13 周 ≈ 一个季度
 
 const C = {
   brand: Color.dynamic(new Color("#4D6BFE"), new Color("#7B93FF")),
@@ -333,7 +334,7 @@ function ledgerFor(rec, currency) {
   return (rec && rec.ledger && rec.ledger[currency]) || { consume: 0, recharge: 0, since: null, last: null };
 }
 
-// 每日消费序列（用于折线图），返回从旧到新共 days 项
+// 每日消费序列（从旧到新共 days 项）
 function dailySeries(rec, currency, days) {
   const map = (rec && rec.daily && rec.daily[currency]) || {};
   const out = [];
@@ -342,6 +343,27 @@ function dailySeries(rec, currency, days) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
     const k = dayKey(d.getTime());
     out.push({ day: k, label: k.slice(5), value: map[k] || 0 });
+  }
+  return out;
+}
+
+// 按周聚合的消费序列（13 周 ≈ 一个季度）。
+// 跨度大时逐日画柱会细成条形码，所以按 7 天并成一柱；最后一项是本周至今。
+function weeklySeries(rec, currency, weeks) {
+  const map = (rec && rec.daily && rec.daily[currency]) || {};
+  const out = [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (let i = weeks - 1; i >= 0; i--) {
+    const end = today.getTime() - i * 7 * 86400000;
+    const start = end - 6 * 86400000;
+    let sum = 0;
+    for (let d = 0; d < 7; d++) sum += map[dayKey(start + d * 86400000)] || 0;
+    out.push({
+      start: dayKey(start).slice(5),
+      end: dayKey(end).slice(5),
+      value: Math.round(sum * 100) / 100,
+    });
   }
   return out;
 }
@@ -675,16 +697,17 @@ function buildWidget(state, family) {
 
 
   // 消费图（中号 / 大号）：默认直方图，参数里写 line 可切折线。
+  // 跨度 13 周 ≈ 一个季度，按周聚合成柱（逐日柱在这宽度下会细成条形码）。
   // 数据来自本机采样：余额下降即消费。
   if (!isSmall && state.rec) {
-    const days = isLarge ? 14 : 10;
-    const values = dailySeries(state.rec, primary.currency, days).map((s) => s.value);
-    const dayMax = Math.max.apply(null, values);
-    const daySum = values.reduce((a, b) => a + b, 0);
+    const series = weeklySeries(state.rec, primary.currency, CHART_WEEKS);
+    const values = series.map((s) => s.value);
+    const weekMax = Math.max.apply(null, values);
+    const weekSum = values.reduce((a, b) => a + b, 0);
     const led = ledgerFor(state.rec, primary.currency);
 
     w.addSpacer(isLarge ? 8 : 6);
-    if (dayMax > 0.005) {
+    if (weekMax > 0.005) {
       const cw = isLarge ? 285 : 255;
       const ch = isLarge ? 58 : 34;
       const img = state.chart === "line"
@@ -697,19 +720,28 @@ function buildWidget(state, family) {
         w.addSpacer(3);
       }
       const cap = w.addText(
-        "近 " + days + " 天每日消费 · 最高 " + dayMax.toFixed(2) + " · 合计 " + daySum.toFixed(2) +
-          (led.since ? " · 累计 " + led.consume.toFixed(2) : "")
+        "近 " + CHART_WEEKS + " 周（约一季度）· 合计 " + weekSum.toFixed(2) +
+          (isLarge ? " · 单周最高 " + weekMax.toFixed(2) : "")
       );
       cap.font = Font.systemFont(9);
       cap.textColor = C.dim;
       cap.lineLimit = 1;
-      cap.minimumScaleFactor = 0.75;
+      cap.minimumScaleFactor = 0.7;
+
+      if (isLarge && led.since) {
+        w.addSpacer(2);
+        const from = w.addText("消费记录自 " + clockTime(led.since) + " 起累计（接口不提供历史账单）");
+        from.font = Font.systemFont(9);
+        from.textColor = C.dim;
+        from.lineLimit = 1;
+        from.minimumScaleFactor = 0.7;
+      }
     } else {
-      const cap = w.addText("近 " + days + " 天暂无消费记录（脚本每次刷新时累计）");
+      const cap = w.addText("近 " + CHART_WEEKS + " 周暂无消费记录（脚本每次刷新时累计）");
       cap.font = Font.systemFont(9);
       cap.textColor = C.dim;
       cap.lineLimit = 1;
-      cap.minimumScaleFactor = 0.75;
+      cap.minimumScaleFactor = 0.7;
     }
   }
 
