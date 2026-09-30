@@ -123,8 +123,13 @@ async function promptForKey(alias) {
   const a = new Alert();
   a.title = "DeepSeek API Key";
   a.message = "别名：" + alias + "\n粘贴以 sk- 开头的 API Key，仅保存在本机钥匙串。";
-  if (a.addSecureTextField) a.addSecureTextField("sk-...", "");
-  else a.addTextField("sk-...", "");
+  // addSecureTextField 从 Scriptable 1.5 起就有；用 try 兜底是为了极端老版本。
+  // 注意：文本输入框只支持 present()/presentAlert()，presentSheet() 不支持。
+  try {
+    a.addSecureTextField("sk-...", "");
+  } catch (e) {
+    a.addTextField("sk-...", "");
+  }
   a.addAction("保存");
   a.addCancelAction("取消");
   const idx = await a.present();
@@ -547,20 +552,27 @@ async function runInApp(initialAlias) {
     const hasKey = !!storedKey(alias);
 
     const a = new Alert();
-    a.title = "DeepSeek API 余额";
+    a.title = "DeepSeek API 余额" + (alias === DEFAULT_ALIAS ? "" : " · " + alias);
     a.message = detailText(state) + "\n\n" + (hasKey ? "" : "⚠️ 尚未保存该别名的 API Key");
-    if (state.state === "live" || state.state === "stale") a.addAction("预览小组件");
-    a.addAction("刷新");
-    a.addAction(hasKey ? "更换 API Key" : "设置 API Key");
-    a.addAction("切换 / 新增别名");
-    if (state.state === "live") a.addAction("复制总余额");
-    a.addAction("清空历史记录");
-    if (hasKey) a.addDestructiveAction("删除此别名的 Key");
+
+    // Alert 只返回被点按钮的 index，没有取标题的 API，所以自己按相同顺序记下来。
+    // 注意：取消按钮不占 index，选中时一律返回 -1。
+    const actions = [];
+    const action = (t) => { a.addAction(t); actions.push(t); };
+    const destructive = (t) => { a.addDestructiveAction(t); actions.push(t); };
+
+    if (state.state === "live" || state.state === "stale") action("预览小组件");
+    action("刷新");
+    action(hasKey ? "更换 API Key" : "设置 API Key");
+    action("切换 / 新增别名");
+    if (state.state === "live") action("复制总余额");
+    action("清空历史记录");
+    if (hasKey) destructive("删除此别名的 Key");
     a.addCancelAction("关闭");
 
     const idx = await a.presentSheet();
-    const title = a.buttonTitle(idx);
-    if (idx === -1 || title === "关闭") break;
+    const title = idx >= 0 && idx < actions.length ? actions[idx] : null;
+    if (!title) break;
 
     if (title === "预览小组件") {
       const w = buildWidget(state, fam);

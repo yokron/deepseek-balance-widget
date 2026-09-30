@@ -204,6 +204,7 @@ git push -u origin main
 
 | 现象 | 处理 |
 | --- | --- |
+| 运行时报 `xxx is not a function` / `is undefined` | 装的是旧版脚本。打开[安装页](https://yokron.github.io/deepseek-balance-widget/)，重新「复制脚本」覆盖 Scriptable 里那份 |
 | 显示「还没有配置 API Key」 | 在 Scriptable 里运行脚本，先设置 Key；Key 存在钥匙串，**重装 Scriptable 会丢失** |
 | 一直显示「离线数据」 | 检查网络/代理；确认 Key 未过期；在 App 内手动「刷新」看具体错误 |
 | 提示 `API Key 无效或无权限` | Key 复制时带了空格，或已被删除/禁用 |
@@ -212,26 +213,33 @@ git push -u origin main
 
 ## 十一、开发者：本地回归测试
 
-脚本用一个最小 stub 模拟了 Scriptable 的 `ListWidget / Text / Color / Font / Request / Keychain / FileManager / Alert` 等全局对象，可以在电脑上直接跑，覆盖 8 个场景（无 Key、正常 200、别名与货币参数、401、断网回退缓存、折线历史、App 菜单流程）：
+脚本用一个最小 stub 模拟了 Scriptable 的 `ListWidget / Alert / Text / Color / Font / Request / Keychain / FileManager / DrawContext` 等全局对象，可以在电脑上直接跑。
+
+**stub 全部包在「严格 Proxy」里**：脚本一旦访问 Scriptable 真实不存在的属性/方法，测试立刻失败。这一层是踩坑加上的 —— 早期 stub 手写了一个并不存在的 `Alert.buttonTitle()`，导致本地全绿、真机运行时报 `a.buttonTitle is not a function`。
 
 ```bash
 node _test/run.mjs
 ```
 
 ```
-✅ 无 Key 时返回提示组件（三种尺寸）     ok
-✅ 有 Key 且接口 200：生成组件并写缓存  缓存 + 历史 ok
-✅ 参数 work|USD 生效          ok
-✅ 401 时给出 Key 无效组件        ok
-✅ 断网时回退到缓存（stale）         离线标记 + 缓存数值 ok
-✅ 大尺寸在有多条历史时绘制折线          折线 ok
-✅ App 内运行并选择关闭不崩溃         ok
-✅ App 内菜单流程               菜单项：8 个
+✅ 无 Key 时返回提示组件（三种尺寸）
+✅ 有 Key 且接口 200：生成组件并写缓存
+✅ 参数 work|USD 生效
+✅ 401 时给出 Key 无效组件
+✅ 断网时回退到缓存（stale）
+✅ 大尺寸在有多条历史时绘制折线
+✅ App 内：无 Key 时能设置 Key（真机崩溃路径）
+✅ App 内：点「预览小组件」调用 presentMedium
+✅ App 内：点「复制总余额」写入剪贴板
+✅ App 内：切换别名后新别名独立存取 Key
+✅ App 内：清空历史 + 删除 Key 生效
+✅ App 内：一直取消能正常退出
+✅ 严格模式自检：调用不存在的 API 必须报错
 
-8/8 通过
+13/13 通过
 ```
 
-> 注意：stub 只能验证逻辑与 API 用法，真机渲染效果仍需在 iPhone 上看一眼。
+> stub 只能验证逻辑与 API 用法，真机渲染效果仍需在 iPhone 上看一眼。
 
 ## 十二、想要「真·原生 App」？
 
