@@ -20,6 +20,7 @@ const DEFAULT_ALIAS = "default";
 const CACHE_FILE = "deepseek-balance-cache.json";
 const HISTORY_FILE = "deepseek-balance-history.json";
 const HISTORY_LIMIT = 96;
+const DAILY_KEEP = 60;
 
 const C = {
   brand: Color.dynamic(new Color("#4D6BFE"), new Color("#7B93FF")),
@@ -30,6 +31,15 @@ const C = {
   bad: Color.dynamic(new Color("#DC2626"), new Color("#FF6B6B")),
   card: Color.dynamic(new Color("#F4F6FF"), new Color("#1B1D24")),
 };
+
+// 折线图下方的面积填充色（低透明度品牌色）。Color(hex, alpha) 万一不支持就退化成不可见填充。
+function softBrand() {
+  try {
+    return Color.dynamic(new Color("#4D6BFE", 0.16), new Color("#7B93FF", 0.18));
+  } catch (e) {
+    return C.card;
+  }
+}
 
 // ---------------------------------------------------------------- utils
 
@@ -214,22 +224,116 @@ function saveCache(alias, data) {
   writeJSON(cachePath(), all);
 }
 
-function pushHistory(alias, currency, total) {
-  const all = readJSON(historyPath(), {});
-  const list = Array.isArray(all[alias]) ? all[alias] : [];
-  const last = list[list.length - 1];
-  if (!last || last.c !== currency || Math.abs(last.v - total) > 0.0001 || Date.now() - last.t > 30 * 60000) {
-    list.push({ t: Date.now(), v: total, c: currency });
-  }
-  while (list.length > HISTORY_LIMIT) list.shift();
-  all[alias] = list;
-  writeJSON(historyPath(), all);
-  return list;
+// ------------------------------------------------- 采样 / 累计消费台账
+//
+// DeepSeek 没有「用量 / 消费」查询接口（官方 API 只有 Chat、Responses、FIM、
+// 获取模型列表、查询余额、Files），所以累计消费只能靠本机采样推算：
+//     余额下降 = 消费，余额上升 = 充值
+// 采样频率不影响总量正确性 —— 两次观测之间的变化都会被计入；
+// 只有「记在哪一天」取决于观测时刻，所以系统刷新越频繁，日粒度越准。
+// 局限：只能统计本脚本开始记录之后的消费，之前的历史无法回溯。
+
+function dayKey(ts) {
+  const d = new Date(ts);
+  const p = (x) => String(x).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
 }
 
-function historyFor(alias) {
+function emptyRecord() {
+  return { samples: [], ledger: {}, daily: {} };
+}
+
+// 兼容早期只存一个采样数组的格式：把每个币种最后一次采样作为「基准」，
+// 这样紧接着的这次刷新就能算出差额（since 即基准时刻，之后的变化才计入）
+function seedLedgerFromSamples(rec) {
+  (rec.samples || []).forEach((s) => {
+    if (!s || typeof s.v !== "number" || !s.c) return;
+    const led = rec.ledger[s.c] || (rec.ledger[s.c] = { consume: 0, recharge: 0, since: null, last: null });
+    if (!led.last || s.t >= led.last.t) {
+      led.last = { t: s.t, v: s.v };
+      led.since = s.t;
+    }
+  });
+}
+
+function normalizeRecord(raw) {
+  if (Array.isArray(raw)) {
+    const rec = { samples: raw, ledger: {}, daily: {} };
+    seedLedgerFromSamples(rec);
+    return rec;
+  }
+  if (raw && typeof raw === "object") {
+    return {
+      samples: Array.isArray(raw.samples) ? raw.samples : [],
+      ledger: raw.ledger && typeof raw.ledger === "object" ? raw.ledger : {},
+      daily: raw.daily && typeof raw.daily === "object" ? raw.daily : {},
+    };
+  }
+  return emptyRecord();
+}
+
+function loadRecord(alias) {
   const all = readJSON(historyPath(), {});
-  return Array.isArray(all[alias]) ? all[alias] : [];
+  return normalizeRecord(all[alias]);
+}
+
+function recordSample(alias, currency, total) {
+  const all = readJSON(historyPath(), {});
+  const rec = normalizeRecord(all[alias]);
+  const now = Date.now();
+  const r2 = (n) => Math.round(n * 100) / 100;
+
+  const led = rec.ledger[currency] || { consume: 0, recharge: 0, since: now, last: null };
+  if (led.last && typeof led.last.v === "number") {
+    const delta = total - led.last.v;
+    if (delta < -0.005) {
+      const spend = -delta;
+      led.consume = r2(led.consume + spend);
+      rec.daily[currency] = rec.daily[currency] || {};
+      const day = dayKey(now);
+      rec.daily[currency][day] = r2((rec.daily[currency][day] || 0) + spend);
+    } else if (delta > 0.005) {
+      led.recharge = r2(led.recharge + delta);
+    }
+  }
+  led.last = { t: now, v: total };
+  rec.ledger[currency] = led;
+
+  // 采样序列（大号折线备用，同时兼容旧数据）
+  const list = rec.samples;
+  const lastS = list[list.length - 1];
+  if (!lastS || lastS.c !== currency || Math.abs(lastS.v - total) > 0.0001 || now - lastS.t > 30 * 60000) {
+    list.push({ t: now, v: total, c: currency });
+  }
+  while (list.length > HISTORY_LIMIT) list.shift();
+
+  // 每日消费只留最近 DAILY_KEEP 天
+  Object.keys(rec.daily).forEach((cur) => {
+    const map = rec.daily[cur];
+    const keys = Object.keys(map).sort();
+    while (keys.length > DAILY_KEEP) delete map[keys.shift()];
+  });
+
+  all[alias] = rec;
+  writeJSON(historyPath(), all);
+  return rec;
+}
+
+function ledgerFor(rec, currency) {
+  return (rec && rec.ledger && rec.ledger[currency]) || { consume: 0, recharge: 0, since: null, last: null };
+}
+
+// 每日消费序列（用于折线图），返回从旧到新共 days 项
+function dailySeries(rec, currency, days) {
+  const map = (rec && rec.daily && rec.daily[currency]) || {};
+  const out = [];
+  const now = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+    const k = dayKey(d.getTime());
+    out.push({ day: k, label: k.slice(5), value: map[k] || 0 });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- 数据准备
@@ -255,8 +359,8 @@ async function resolveState(alias, currency) {
   if (res.ok) {
     saveCache(alias, res);
     const primary = pickPrimary(res.balanceInfos, currency);
-    const hist = pushHistory(alias, primary.currency, primary.total);
-    return { state: "live", alias, data: res, primary, history: hist, key };
+    const rec = recordSample(alias, primary.currency, primary.total);
+    return { state: "live", alias, data: res, primary, rec, key };
   }
 
   if (cached && Array.isArray(cached.balanceInfos)) {
@@ -266,7 +370,7 @@ async function resolveState(alias, currency) {
       alias,
       data: cached,
       primary,
-      history: historyFor(alias),
+      rec: loadRecord(alias),
       error: res,
       key,
     };
@@ -277,38 +381,44 @@ async function resolveState(alias, currency) {
 
 // ---------------------------------------------------------------- 绘图
 
-function sparkline(values, width, height, color) {
+// 折线图。values 是等间隔数值序列；fillColor 非空时在折线下方做面积填充。
+function lineChart(values, width, height, color, fillColor) {
+  if (!values || values.length < 2) return null;
+
   const ctx = new DrawContext();
   ctx.size = new Size(width, height);
   ctx.opaque = false;
   ctx.respectScreenScale = true;
 
-  if (!values || values.length < 2) return null;
-
-  const min = Math.min.apply(null, values);
   const max = Math.max.apply(null, values);
-  const span = max - min || 1;
+  const span = max > 0 ? max : 1;
+  const padTop = 4;
+  const padBottom = 3;
+  const usable = height - padTop - padBottom;
   const stepX = width / (values.length - 1);
-  const pad = 3;
+  const pts = values.map((v, i) => new Point(i * stepX, padTop + (1 - v / span) * usable));
+
+  if (fillColor) {
+    const area = new Path();
+    area.move(new Point(0, height - padBottom));
+    pts.forEach((p) => area.addLine(p));
+    area.addLine(new Point(width, height - padBottom));
+    ctx.addPath(area);
+    ctx.setFillColor(fillColor);
+    ctx.fillPath();
+  }
 
   const path = new Path();
-  values.forEach((v, i) => {
-    const x = i * stepX;
-    const y = height - pad - ((v - min) / span) * (height - pad * 2);
-    if (i === 0) path.move(new Point(x, y));
-    else path.addLine(new Point(x, y));
-  });
-
+  pts.forEach((p, i) => (i === 0 ? path.move(p) : path.addLine(p)));
   ctx.addPath(path);
   ctx.setStrokeColor(color);
   ctx.setLineWidth(1.6);
   ctx.strokePath();
 
   // 末端圆点
-  const lastX = width;
-  const lastY = height - pad - ((values[values.length - 1] - min) / span) * (height - pad * 2);
+  const lastP = pts[pts.length - 1];
   const dot = new Path();
-  dot.addEllipse(new Rect(lastX - 3.5, lastY - 3.5, 7, 7));
+  dot.addEllipse(new Rect(lastP.x - 3, lastP.y - 3, 6, 6));
   ctx.addPath(dot);
   ctx.setFillColor(color);
   ctx.fillPath();
@@ -369,7 +479,7 @@ function buildBalanceBlock(root, primary, big) {
   return wrap;
 }
 
-function buildDetailRows(root, primary, compact) {
+function buildDetailRows(root, primary, compact, rec) {
   const row = stack(root);
   row.layoutHorizontally();
   row.spacing = 12;
@@ -391,9 +501,14 @@ function buildDetailRows(root, primary, compact) {
   //   granted_balance    = 未过期的赠金余额
   //   topped_up_balance  = 充值余额
   // 即 total = granted + toppedUp，所以这里只列构成，不推导"已用"
-  // （曾经加过一行"已用 = 赠送+充值-总额"，它恒为 0，容易让人误以为显示的是用量）
-  mk("赠金", toNumber(primary.granted).toFixed(2));
+  // （曾经加过一行"已用 = 赠金+充值-总额"，它恒为 0，容易让人误以为显示的是用量）
+  const granted = toNumber(primary.granted);
+  const led = ledgerFor(rec, primary.currency);
+
+  // 赠金为 0 时没有任何信息量，不占位置；小号空间紧张，有累计消费数据时也让位
+  if (granted > 0.005 && (!compact || led.consume < 0.005)) mk("赠金", granted.toFixed(2));
   mk("充值", toNumber(primary.toppedUp).toFixed(2));
+  if (led.since) mk("累计消费", led.consume.toFixed(2), led.consume > 0.005 ? C.warn : C.dim);
   return row;
 }
 
@@ -495,7 +610,7 @@ function buildWidget(state, family) {
   }
 
   w.addSpacer(isSmall ? 5 : 6);
-  buildDetailRows(w, primary, isSmall);
+  buildDetailRows(w, primary, isSmall, state.rec);
 
   // 多币种其它币种
   const others = (state.data.balanceInfos || []).filter((b) => b.currency !== primary.currency);
@@ -508,16 +623,36 @@ function buildWidget(state, family) {
     o.lineLimit = 1;
   }
 
-  if (isLarge && state.history && state.history.length >= 2) {
-    w.addSpacer(8);
-    const vals = state.history.map((h) => h.v);
-    const img = sparkline(vals, 260, 54, C.brand);
-    if (img) {
-      const box = stack(w);
-      box.addImage(img);
-      const cap = w.addText("近 " + state.history.length + " 次记录");
+  // 消费折线图（中号 / 大号）。数据来自本机采样：余额下降即消费。
+  if (!isSmall && state.rec) {
+    const days = isLarge ? 14 : 10;
+    const values = dailySeries(state.rec, primary.currency, days).map((s) => s.value);
+    const dayMax = Math.max.apply(null, values);
+    const led = ledgerFor(state.rec, primary.currency);
+
+    w.addSpacer(isLarge ? 8 : 6);
+    if (dayMax > 0.005) {
+      const img = lineChart(values, isLarge ? 285 : 255, isLarge ? 58 : 34, C.brand, softBrand());
+      if (img) {
+        const box = stack(w);
+        box.centerAlignContent();
+        box.addImage(img);
+        w.addSpacer(3);
+      }
+      const cap = w.addText(
+        "近 " + days + " 天每日消费 · 最高 " + dayMax.toFixed(2) +
+          (led.since ? " · 累计 " + led.consume.toFixed(2) : "")
+      );
       cap.font = Font.systemFont(9);
       cap.textColor = C.dim;
+      cap.lineLimit = 1;
+      cap.minimumScaleFactor = 0.75;
+    } else {
+      const cap = w.addText("近 " + days + " 天暂无消费记录（脚本每次刷新时累计）");
+      cap.font = Font.systemFont(9);
+      cap.textColor = C.dim;
+      cap.lineLimit = 1;
+      cap.minimumScaleFactor = 0.75;
     }
   }
 
@@ -539,11 +674,19 @@ function detailText(state) {
   (state.data.balanceInfos || []).forEach((b) => {
     lines.push("[" + b.currency + "]");
     lines.push("  总额：" + toNumber(b.total).toFixed(2));
-    lines.push("  赠金：" + toNumber(b.granted).toFixed(2));
+    lines.push("  赠金：" + toNumber(b.granted).toFixed(2) + (toNumber(b.granted) <= 0.005 ? "（无）" : ""));
     lines.push("  充值：" + toNumber(b.toppedUp).toFixed(2));
+    const led = ledgerFor(state.rec, b.currency);
+    if (led.since) {
+      lines.push("  累计消费：" + led.consume.toFixed(2) + "（自 " + clockTime(led.since).slice(0, 5) + " 起）");
+      lines.push("  累计充值：" + led.recharge.toFixed(2));
+    } else {
+      lines.push("  累计消费：待记录（下次刷新开始）");
+    }
     lines.push("");
   });
   lines.push("抓取时间：" + clockTime(state.data.fetchedAt) + "（" + relTime(state.data.fetchedAt) + "）");
+  lines.push("累计消费由余额变化推算（接口不提供用量数据）");
   return lines.join("\n");
 }
 

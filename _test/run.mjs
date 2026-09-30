@@ -63,11 +63,13 @@ let requestCount = 0;
 const log = [];
 
 class ColorImpl {
-  constructor(hex) {
+  constructor(hex, alpha) {
     if (typeof hex !== "string" || !/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(hex)) throw new Error("Invalid hex string: " + hex);
+    if (alpha !== undefined && (typeof alpha !== "number" || alpha < 0 || alpha > 1)) throw new Error("Color alpha 必须是 0~1");
     this.hex = hex;
+    this.alpha = alpha;
   }
-  static dynamic(a, b) { return new ColorImpl(a.hex); }
+  static dynamic(a, b) { return new ColorImpl(a.hex, a.alpha); }
 }
 class FontImpl {
   static boldSystemFont(s) { return { kind: "bold", s }; }
@@ -286,8 +288,9 @@ await check("有 Key 且接口 200：生成组件并写缓存", async () => {
   if (requestCount !== 3) throw new Error("请求次数异常 " + requestCount);
   const cache = JSON.parse(files.get(CACHE));
   if (!cache.default || cache.default.balanceInfos.length !== 2) throw new Error("缓存写入异常");
-  const hist = JSON.parse(files.get(HISTORY));
-  if (hist.default.length !== 1) throw new Error("历史写入异常 " + JSON.stringify(hist));
+  const rec = JSON.parse(files.get(HISTORY)).default;
+  if (!rec || rec.samples.length !== 1) throw new Error("采样写入异常 " + JSON.stringify(rec));
+  if (!rec.ledger || !rec.ledger.CNY || !(rec.ledger.CNY.since > 0)) throw new Error("台账未初始化");
 });
 
 await check("参数 work|USD 生效", async () => {
@@ -323,21 +326,79 @@ await check("断网时回退到缓存（stale）", async () => {
   nextStatus = 200;
 });
 
-await check("大尺寸在有多条历史时绘制折线", async () => {
+await check("余额下降记消费、上升记充值，当日分桶", async () => {
+  reset({ key: "sk-test-123" });
+  config.runsInWidget = true; config.widgetFamily = "small";
+  SAMPLE.balance_infos[0].total_balance = "100.00";
+  await mod.main();                                    // 基准
+  SAMPLE.balance_infos[0].total_balance = "97.50";
+  await mod.main();                                    // -2.50 消费
+  SAMPLE.balance_infos[0].total_balance = "107.50";
+  await mod.main();                                    // +10 充值，不算消费
+  SAMPLE.balance_infos[0].total_balance = "106.00";
+  await mod.main();                                    // -1.50 消费
+  const rec = JSON.parse(files.get(HISTORY)).default;
+  const led = rec.ledger.CNY;
+  const near = (a, b) => Math.abs(a - b) < 1e-6;
+  if (!near(led.consume, 4)) throw new Error("累计消费应为 4，实际 " + led.consume);
+  if (!near(led.recharge, 10)) throw new Error("累计充值应为 10，实际 " + led.recharge);
+  const days = Object.keys(rec.daily.CNY);
+  if (days.length !== 1) throw new Error("当日分桶异常 " + JSON.stringify(rec.daily));
+  if (!near(rec.daily.CNY[days[0]], 4)) throw new Error("当日消费应为 4，实际 " + rec.daily.CNY[days[0]]);
+  return "消费 4.00 / 充值 10.00";
+});
+
+await check("中号/大号在有消费时画折线图", async () => {
   reset({ key: "sk-test-123" });
   config.runsInWidget = true; config.widgetFamily = "large";
-  for (let i = 0; i < 3; i++) {
-    SAMPLE.balance_infos[0].total_balance = String(110 - i * 5);
-    await mod.main();
-  }
-  const hist = JSON.parse(files.get(HISTORY));
-  if (hist.default.length !== 3) throw new Error("历史条数 " + hist.default.length);
+  SAMPLE.balance_infos[0].total_balance = "100.00";
+  await mod.main();
+  SAMPLE.balance_infos[0].total_balance = "96.00";
+  await mod.main();
   script._widget = null;
   await mod.main();
   const imgs = imgsOf(script._widget);
   if (imgs.length !== 1) throw new Error("折线图数量 " + imgs.length);
-  if (!imgs[0].paths || imgs[0].paths.length === 0) throw new Error("折线无路径");
-  SAMPLE.balance_infos[0].total_balance = "110.00";
+  if (!imgs[0].paths || imgs[0].paths.length < 2) throw new Error("折线/面积路径缺失");
+  const t = textsOf(script._widget).join(" | ");
+  if (!/每日消费/.test(t)) throw new Error("缺少图表说明: " + t);
+  config.widgetFamily = "medium"; script._widget = null;
+  await mod.main();
+  if (imgsOf(script._widget).length !== 1) throw new Error("中号没有折线图");
+});
+
+await check("没有消费数据时不画图，给文字提示", async () => {
+  reset({ key: "sk-test-123" });
+  config.runsInWidget = true; config.widgetFamily = "medium";
+  await mod.main();                                    // 只有基准，没有消费
+  const t = textsOf(script._widget).join(" | ");
+  if (!/暂无消费记录/.test(t)) throw new Error("缺少提示: " + t);
+  if (imgsOf(script._widget).length !== 0) throw new Error("无消费却画了图");
+});
+
+await check("赠金为 0 时不显示该字段", async () => {
+  reset({ key: "sk-test-123" });
+  SAMPLE.balance_infos[0].granted_balance = "0.00";
+  config.runsInWidget = true; config.widgetFamily = "large";
+  await mod.main();
+  if (textsOf(script._widget).includes("赠金")) throw new Error("赠金为 0 仍显示");
+  SAMPLE.balance_infos[0].granted_balance = "5.00";
+  script._widget = null;
+  await mod.main();
+  if (!textsOf(script._widget).includes("赠金")) throw new Error("赠金非 0 却没显示");
+});
+
+await check("旧版历史（纯数组）自动迁移并接上基准", async () => {
+  reset();
+  store.set(KC("default"), "sk-test-123");
+  files.set(HISTORY, JSON.stringify({ default: [{ t: Date.now() - 3600e3, v: 50, c: "CNY" }] }));
+  SAMPLE.balance_infos[0].total_balance = "45.00";
+  config.runsInWidget = true; config.widgetFamily = "small";
+  await mod.main();
+  const rec = JSON.parse(files.get(HISTORY)).default;
+  if (Array.isArray(rec)) throw new Error("未迁移成新结构");
+  const c = rec.ledger.CNY.consume;
+  if (Math.abs(c - 5) > 1e-6) throw new Error("迁移后应把 50→45 记为消费 5，实际 " + c);
 });
 
 await check("App 内：无 Key 时能设置 Key（真机崩溃路径）", async () => {
@@ -388,7 +449,11 @@ await check("App 内：清空历史 + 删除 Key 生效", async () => {
   choose("清空历史记录", "删除此别名的 Key");
   await mod.main();
   const hist = JSON.parse(files.get(HISTORY));
-  if ((hist.default || []).some((h) => h.v > 900)) throw new Error("旧历史未清空: " + JSON.stringify(hist));
+  const rec = hist.default || {};
+  const samples = Array.isArray(rec) ? rec : rec.samples || [];
+  if (samples.some((h) => h.v > 900)) throw new Error("旧采样未清空: " + JSON.stringify(samples));
+  const led = rec.ledger && rec.ledger.CNY;
+  if (led && led.consume > 0.005) throw new Error("清空后仍有累计消费 " + led.consume);
   if (store.has(KC("default"))) throw new Error("Key 未删除");
 });
 
