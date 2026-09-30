@@ -1,0 +1,10 @@
+# 统一换行符，避免 Windows 上 git 反复提示 LF/CRLF
+* text=auto
+.gitattributes text eol=lf
+*.js   text eol=lf
+*.md   text eol=lf
+*.html text eol=lf
+*.mjs  text eol=lf
+*.json text eol=lf
+*.ps1  text eol=crlf
+*.png  binary

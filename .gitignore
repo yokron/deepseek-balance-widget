@@ -1,0 +1,18 @@
+# 依赖 / 构建产物
+node_modules/
+_test/DeepSeekBalance.mjs
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+*.log
+
+# 本机开发辅助（含凭据读取，不发布）
+_transfer/token.ps1
+_transfer/.ghcreds.tmp
+_test/net-probe.mjs

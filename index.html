@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>DeepSeek 余额小组件 · 安装</title>
+<style>
+  :root { color-scheme: light dark; --brand:#4d6bfe; --card:#fff; --line:#e5e7ef; --muted:#6b7280; --bg:#f5f6fa; --fg:#111; }
+  @media (prefers-color-scheme: dark) {
+    :root { --card:#191c23; --line:#2a2e38; --muted:#9aa0ae; --bg:#0f1116; --fg:#eef0f6; }
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; padding:22px 16px 64px; background:var(--bg); color:var(--fg);
+         font:16px/1.65 -apple-system,"PingFang SC",system-ui,sans-serif; }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:23px; margin:0 0 6px; letter-spacing:.2px; }
+  h2 { font-size:16px; margin:0 0 10px; }
+  .muted { color:var(--muted); font-size:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin:14px 0; }
+  ol { padding-left:22px; margin:6px 0; }
+  li { margin:7px 0; }
+  code { background:rgba(125,125,125,.16); padding:1px 5px; border-radius:5px; font-size:14px; }
+  textarea { width:100%; height:230px; font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;
+             border:1px solid var(--line); border-radius:12px; padding:10px; resize:vertical;
+             white-space:pre; background:var(--bg); color:var(--fg); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+  button, a.btn { flex:1 1 150px; text-align:center; text-decoration:none; font-size:16px; font-weight:600;
+        padding:14px 16px; border-radius:14px; border:0; background:var(--brand); color:#fff; cursor:pointer;
+        display:inline-block; }
+  button.ghost, a.ghost { background:rgba(125,125,125,.16); color:inherit; }
+  .qr { text-align:center; }
+  .qr img { width:190px; height:190px; border-radius:10px; background:#fff; }
+  #toast { position:fixed; left:50%; bottom:28px; transform:translateX(-50%); background:#111; color:#fff;
+           padding:12px 20px; border-radius:999px; font-size:15px; opacity:0; transition:opacity .2s;
+           pointer-events:none; max-width:88vw; text-align:center; }
+  #toast.show { opacity:.94; }
+  .tag { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px;
+         background:rgba(77,107,254,.14); color:var(--brand); vertical-align:middle; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>DeepSeek 余额小组件 <span class="tag">Scriptable</span></h1>
+  <div class="muted">在 iPhone 桌面直接看 DeepSeek API 余额 · 赠送 / 充值 / 已用 · 多币种 · 离线缓存</div>
+
+  <div class="card">
+    <h2>① 复制脚本</h2>
+    <ol>
+      <li>点下面 <b>「复制脚本」</b>（没反应就点「全选」再点弹出的「拷贝」）</li>
+      <li>打开 <b>Scriptable</b> → 右上角 <code>+</code> 新建脚本</li>
+      <li>编辑区 <b>长按 → 粘贴</b> → 左上角改名 <code>DeepSeek 余额</code></li>
+      <li>点 ▶️ 运行 → 选 <b>设置 API Key</b> → 粘贴 <code>sk-...</code>（存本机钥匙串）</li>
+    </ol>
+    <textarea id="code" readonly spellcheck="false" wrap="off" placeholder="正在加载脚本…"></textarea>
+    <div class="row">
+      <button id="copyBtn" onclick="copyIt()">复制脚本</button>
+      <button class="ghost" onclick="selectAll()">全选</button>
+      <a class="btn ghost" href="./DeepSeekBalance.js" download>下载 .js</a>
+    </div>
+    <div class="muted" id="meta" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <h2>② 加到桌面</h2>
+    <ol>
+      <li>回主屏 → 长按空白处 → 左上角 <code>+</code> → 搜索 <b>Scriptable</b></li>
+      <li>选尺寸（小 / 中 / 大）→ 添加小组件</li>
+      <li>长按该组件 → <b>编辑小组件</b> → Script 选 <code>DeepSeek 余额</code></li>
+      <li>Parameter 可留空，或填 <code>work</code>、<code>work|USD</code> 指定别名 / 主货币</li>
+    </ol>
+    <div class="muted">iOS 不允许小组件实时刷新，系统大约 15 分钟 ~ 1 小时重跑一次，属正常。</div>
+  </div>
+
+  <div class="card qr">
+    <img id="qrimg" alt="二维码" src="">
+    <div class="muted" style="margin-top:8px">用 iPhone 相机扫码，在手机上打开本页</div>
+  </div>
+
+  <div class="card">
+    <h2>其它</h2>
+    <div class="row">
+      <a class="btn ghost" href="./README.md">使用说明 README</a>
+      <a class="btn ghost" href="./DeepSeekBalance.js">查看源码</a>
+    </div>
+    <div class="muted" style="margin-top:10px">
+      API Key 只保存在 iPhone 钥匙串里，本页与脚本都不会上传它。
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+function toast(t) {
+  var e = document.getElementById('toast');
+  e.textContent = t; e.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(function () { e.classList.remove('show'); }, 2200);
+}
+function selectAll() {
+  var t = document.getElementById('code');
+  t.focus();
+  t.setSelectionRange(0, t.value.length);
+}
+function copyIt() {
+  var t = document.getElementById('code');
+  if (!t.value) { toast('脚本还没加载完，稍等一下'); return; }
+  selectAll();
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(t.value)
+      .then(function () { toast('已复制 ' + t.value.length + ' 字符，去 Scriptable 粘贴'); })
+      .catch(function () { toast('已全选，请点「拷贝」'); });
+  } else {
+    toast('已全选，请点弹出的「拷贝」');
+  }
+}
+function init() {
+  var img = document.getElementById('qrimg');
+  if (location.protocol === 'file:') img.parentNode.style.display = 'none';
+  else img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=380x380&margin=8&data=' +
+                 encodeURIComponent(location.href.split('#')[0]);
+  fetch('./DeepSeekBalance.js', { cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+    .then(function (txt) {
+      document.getElementById('code').value = txt;
+      document.getElementById('meta').textContent =
+        '已加载 ' + txt.split('\n').length + ' 行 · ' + (txt.length / 1024).toFixed(1) + ' KB';
+    })
+    .catch(function (e) {
+      document.getElementById('meta').textContent =
+        '自动加载失败（' + e.message + '），请点「下载 .js」或用 README 里的其它方式。';
+    });
+}
+init();
+</script>
+</body>
+</html>
