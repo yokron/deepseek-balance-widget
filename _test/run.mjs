@@ -1,8 +1,10 @@
 // 用最小 stub 模拟 Scriptable 运行时，验证 DeepSeekBalance.js 能否正常执行。
 //
-// 关键：stub 全部包在「严格 Proxy」里 —— 脚本一旦访问 Scriptable 实际不存在的
-// 属性/方法（例如 Alert.buttonTitle），测试会立刻失败。上一版 stub 手写了
-// buttonTitle 这种不存在的 API，导致真机上才炸，所以这里加了这层保护。
+// 两条硬约束：
+//   1) stub 全部包在「严格 Proxy」里 —— 脚本一旦访问 Scriptable 真实不存在的
+//      属性/方法就立刻失败（早期 stub 手写过不存在的 Alert.buttonTitle()，
+//      导致本地全绿、真机报错）。
+//   2) 断言脚本只写缓存文件 —— 保证"只显示官方接口返回的字段"，不落地任何推算数据。
 //
 // 运行： node _test/run.mjs
 import fs from "node:fs";
@@ -12,7 +14,6 @@ import { pathToFileURL } from "node:url";
 const ROOT = path.resolve(import.meta.dirname, "..");
 const files = new Map();
 
-// 把 Scriptable 脚本转成可导入的 ESM：去掉顶层执行，导出 main() 以便逐个场景驱动。
 const src = fs.readFileSync(path.join(ROOT, "DeepSeekBalance.js"), "utf8");
 if (!src.includes("await main();")) throw new Error("脚本入口 await main(); 未找到");
 fs.writeFileSync(path.join(import.meta.dirname, "DeepSeekBalance.mjs"), src.replace("await main();", "export { main };"));
@@ -20,7 +21,6 @@ fs.writeFileSync(path.join(import.meta.dirname, "DeepSeekBalance.mjs"), src.repl
 // ---------------------------------------------------------------- 严格代理
 
 const unknownApi = [];
-
 function strict(target, label) {
   if (target == null || typeof target !== "object") return target;
   return new Proxy(target, {
@@ -33,11 +33,7 @@ function strict(target, label) {
       const v = Reflect.get(t, prop, recv);
       return typeof v === "function" ? v.bind(recv) : v;
     },
-    set(t, prop, val, recv) {
-      // 只放行写入：Scriptable 对未知属性是静默忽略，这里不当作错误
-      // （stub 自身也会写内部状态，如 Alert.cancel）
-      return Reflect.set(t, prop, val, recv);
-    },
+    set(t, prop, val, recv) { return Reflect.set(t, prop, val, recv); },
   });
 }
 
@@ -50,13 +46,13 @@ const nextChoice = () => (user.choices.length ? user.choices.shift() : null);
 
 // ---------------------------------------------------------------- stubs
 
-const SAMPLE = {
+let sample = () => ({
   is_available: true,
   balance_infos: [
     { currency: "CNY", total_balance: "110.00", granted_balance: "10.00", topped_up_balance: "100.00" },
     { currency: "USD", total_balance: "8.20", granted_balance: "0.00", topped_up_balance: "8.20" },
   ],
-};
+});
 
 let nextStatus = 200;
 let requestCount = 0;
@@ -67,9 +63,8 @@ class ColorImpl {
     if (typeof hex !== "string" || !/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(hex)) throw new Error("Invalid hex string: " + hex);
     if (alpha !== undefined && (typeof alpha !== "number" || alpha < 0 || alpha > 1)) throw new Error("Color alpha 必须是 0~1");
     this.hex = hex;
-    this.alpha = alpha;
   }
-  static dynamic(a, b) { return new ColorImpl(a.hex, a.alpha); }
+  static dynamic(a) { return new ColorImpl(a.hex); }
 }
 class FontImpl {
   static boldSystemFont(s) { return { kind: "bold", s }; }
@@ -81,37 +76,12 @@ class FontImpl {
 }
 class SizeImpl { constructor(w, h) { this.width = w; this.height = h; return strict(this, "Size"); } }
 class PointImpl { constructor(x, y) { this.x = x; this.y = y; return strict(this, "Point"); } }
-class RectImpl { constructor(x, y, w, h) { Object.assign(this, { x, y, width: w, height: h }); return strict(this, "Rect"); } }
-
-class PathImpl {
-  constructor() { this.ops = []; this.fillColor = null; this.strokeColor = null; return strict(this, "Path"); }
-  move(p) { if (!(p instanceof PointImpl)) throw new Error("Path.move 需要 Point"); this.ops.push(["move", p]); }
-  addLine(p) { this.ops.push(["line", p]); }
-  addEllipse(r) { if (!(r instanceof RectImpl)) throw new Error("Path.addEllipse 需要 Rect"); this.ops.push(["ellipse", r]); }
-  addRect(r) { if (!(r instanceof RectImpl)) throw new Error("Path.addRect 需要 Rect"); this.ops.push(["rect", r]); }
-  addRoundedRect(r, cw, ch) {
-    if (!(r instanceof RectImpl)) throw new Error("Path.addRoundedRect 需要 Rect");
-    if (typeof cw !== "number" || typeof ch !== "number") throw new Error("Path.addRoundedRect 需要圆角数值");
-    this.ops.push(["roundedRect", r]);
-  }
-}
 class LinearGradientImpl {
   constructor() { this.colors = []; this.locations = []; this.startPoint = null; this.endPoint = null; return strict(this, "LinearGradient"); }
-}
-class DrawContextImpl {
-  constructor() { this.size = null; this.paths = []; return strict(this, "DrawContext"); }
-  addPath(p) { if (!(p instanceof PathImpl)) throw new Error("addPath 需要 Path"); this.paths.push(p); }
-  setStrokeColor(c) { this.stroke = c; }
-  setLineWidth(w) { if (typeof w !== "number") throw new Error("setLineWidth 需要 number"); this.lineWidth = w; }
-  strokePath() { if (!this.stroke) throw new Error("strokePath 没有颜色"); }
-  setFillColor(c) { this.fill = c; }
-  fillPath() { if (!this.fill) throw new Error("fillPath 没有颜色"); }
-  getImage() { return { size: this.size, paths: this.paths }; }
 }
 class TextImpl {
   constructor() { this.text = ""; this.font = null; this.textColor = null; this.lineLimit = 0; this.minimumScaleFactor = 1; this.url = null; return strict(this, "Text"); }
 }
-
 class StackImpl {
   constructor() { this.children = []; this.spacing = 0; this.layout = null; return strict(this, "Stack"); }
   addStack() { const s = new StackImpl(); s.layout = this.layout; this.children.push(s); return s; }
@@ -130,7 +100,7 @@ class StackImpl {
   bottomAlignContent() { this.align = "bottom"; }
 }
 class ListWidgetImpl extends StackImpl {
-  constructor() { super(); this.backgroundColor = null; this.url = null; }
+  constructor() { super(); this.backgroundColor = null; this.backgroundGradient = null; this.url = null; }
   setPadding(...a) { if (a.some((v) => typeof v !== "number")) throw new Error("setPadding 需要 number"); this.padding = a; }
   async presentSmall() { log.push("presentSmall"); }
   async presentMedium() { log.push("presentMedium"); }
@@ -140,14 +110,12 @@ class AlertImpl {
   constructor() { this.buttons = []; this.fields = []; this.title = ""; this.message = ""; return strict(this, "Alert"); }
   addAction(t) { this.buttons.push(t); }
   addDestructiveAction(t) { this.buttons.push(t); }
-  addCancelAction(t) { this.cancel = t; }              // 取消按钮不占 index（文档：返回 -1）
+  addCancelAction(t) { this.cancel = t; }
   addTextField(p, v) { this.fields.push(user.texts.length ? user.texts.shift() : v || ""); }
   addSecureTextField(p, v) { this.fields.push(user.texts.length ? user.texts.shift() : v || ""); }
   textFieldValue(i) { return this.fields[i]; }
   answer() {
-    // 带输入框的弹窗（设 Key / 改别名）在真机上只有「保存 / 确定」一种走法，
-    // 这里直接点第一个非取消按钮；文本内容由 type() 提供。
-    if (this.fields.length > 0) return 0;
+    if (this.fields.length > 0) return 0;          // 输入框弹窗：直接点确定
     const want = nextChoice();
     if (want == null) return -1;
     const i = this.buttons.indexOf(want);
@@ -178,7 +146,7 @@ class RequestImpl {
     log.push("GET " + this.url + " status=" + nextStatus);
     if (nextStatus === 0) throw new Error("network down");
     if (nextStatus === 401) return JSON.stringify({ error: { message: "Authentication Fails" } });
-    return JSON.stringify(SAMPLE);
+    return JSON.stringify(sample());
   }
   get response() { return { statusCode: nextStatus }; }
 }
@@ -198,15 +166,13 @@ const script = {
   complete() { log.push("complete"); },
   name: () => "DeepSeekBalance",
 };
-
 const config = strict({ runsInWidget: true, widgetFamily: "small" }, "config");
 const args = strict({ widgetParameter: null }, "args");
 
 Object.assign(globalThis, {
   Color: strict(ColorImpl, "Color"),
   Font: strict(FontImpl, "Font"),
-  Size: SizeImpl, Point: PointImpl, Rect: RectImpl, Path: PathImpl,
-  LinearGradient: LinearGradientImpl, DrawContext: DrawContextImpl, Text: TextImpl,
+  Size: SizeImpl, Point: PointImpl, LinearGradient: LinearGradientImpl, Text: TextImpl,
   ListWidget: ListWidgetImpl, Alert: AlertImpl,
   FileManager: strict(FileManagerImpl, "FileManager"),
   Request: RequestImpl,
@@ -236,26 +202,15 @@ function walk(w, fn) {
     if (!s || seen.has(s)) return;
     seen.add(s);
     fn(s);
-    // 用 in 探测，避免触发严格 Proxy 的「未知属性」报错（探测方是测试自身，不是脚本）
     const kids = "children" in s ? s.children : null;
     if (kids) kids.forEach(rec);
   })(w);
 }
-function textsOf(w) {
-  const out = [];
-  walk(w, (s) => { if (s instanceof TextImpl) out.push(s.text); });
-  return out;
-}
-function imgsOf(w) {
-  const out = [];
-  walk(w, (s) => { if ("image" in s && s.image) out.push(s.image); });
-  return out;
-}
-const KC = (alias) => "deepseek.balance.apikey." + alias;
-const HISTORY = "/mock/Documents/deepseek-balance-history.json";
+const textsOf = (w) => { const o = []; walk(w, (s) => { if (s instanceof TextImpl) o.push(s.text); }); return o; };
 const CACHE = "/mock/Documents/deepseek-balance-cache.json";
+const KC = (alias) => "deepseek.balance.apikey." + alias;
 
-function reset({ key = null, cache = false } = {}) {
+function reset({ key = null } = {}) {
   store.clear();
   files.clear();
   user.choices.length = 0;
@@ -264,13 +219,7 @@ function reset({ key = null, cache = false } = {}) {
   nextStatus = 200;
   requestCount = 0;
   args.widgetParameter = null;
-  // 每个场景都从「干净样本」开始，避免上一个场景改过样本导致连锁失败
-  SAMPLE.balance_infos[0].total_balance = "110.00";
-  SAMPLE.balance_infos[0].granted_balance = "10.00";
-  SAMPLE.balance_infos[0].topped_up_balance = "100.00";
-  SAMPLE.balance_infos[1].total_balance = "8.20";
   if (key) store.set(KC("default"), key);
-  if (cache) files.set(CACHE, JSON.stringify({ default: { isAvailable: true, balanceInfos: SAMPLE.balance_infos.map((b) => ({ currency: b.currency, total: parseFloat(b.total_balance), granted: parseFloat(b.granted_balance), toppedUp: parseFloat(b.topped_up_balance) })), fetchedAt: Date.now() } }));
 }
 
 // ---------------------------------------------------------------- 场景
@@ -285,28 +234,37 @@ await check("无 Key 时返回提示组件（三种尺寸）", async () => {
   }
 });
 
-await check("有 Key 且接口 200：生成组件并写缓存", async () => {
+await check("官方 200：显示 总额/赠金/充值，且只写缓存文件", async () => {
   reset({ key: "sk-test-123" });
   for (const fam of ["small", "medium", "large"]) {
-    config.runsInWidget = true; config.widgetFamily = fam;
+    config.runsInWidget = true; config.widgetFamily = fam; script._widget = null;
     await mod.main();
   }
   if (requestCount !== 3) throw new Error("请求次数异常 " + requestCount);
-  const cache = JSON.parse(files.get(CACHE));
-  if (!cache.default || cache.default.balanceInfos.length !== 2) throw new Error("缓存写入异常");
-  const rec = JSON.parse(files.get(HISTORY)).default;
-  if (!rec || rec.samples.length !== 1) throw new Error("采样写入异常 " + JSON.stringify(rec));
-  if (!rec.ledger || !rec.ledger.CNY || !(rec.ledger.CNY.since > 0)) throw new Error("台账未初始化");
+  const t = textsOf(script._widget);
+  for (const want of ["110.00", "赠金", "10.00", "充值", "100.00"]) {
+    if (!t.includes(want)) throw new Error("缺少 " + want + "：" + t.join(" | "));
+  }
+  const written = [...files.keys()];
+  if (written.length !== 1 || !written[0].endsWith("deepseek-balance-cache.json")) {
+    throw new Error("除缓存外还写了其它文件（说明有推算数据落地）: " + written.join(", "));
+  }
+  const cached = JSON.parse(files.get(CACHE)).default;
+  if (!cached || cached.balanceInfos.length !== 2) throw new Error("缓存内容异常");
 });
 
-await check("参数 work|USD 生效", async () => {
+await check("参数 work|USD：主货币切到 USD", async () => {
   reset();
   store.set(KC("work"), "sk-work");
   args.widgetParameter = "work|USD";
   config.runsInWidget = true; config.widgetFamily = "medium"; script._widget = null;
   await mod.main();
   const t = textsOf(script._widget);
-  if (!t.includes("USD")) throw new Error("未显示 USD: " + t.join(" | "));
+  const iUsd = t.indexOf("USD");
+  const iCny = t.indexOf("CNY");
+  if (iUsd < 0) throw new Error("未显示 USD: " + t.join(" | "));
+  if (iCny >= 0 && iCny < iUsd) throw new Error("主货币仍是 CNY: " + t.join(" | "));
+  if (t[iUsd + 1] !== "8.20") throw new Error("主货币金额不是 USD 的 8.20: " + t.join(" | "));
 });
 
 await check("401 时给出 Key 无效组件", async () => {
@@ -315,154 +273,66 @@ await check("401 时给出 Key 无效组件", async () => {
   config.runsInWidget = true; config.widgetFamily = "small"; script._widget = null;
   await mod.main();
   const t = textsOf(script._widget).join(" | ");
-  if (!/Key 无效|无效或无权限/.test(t)) throw new Error("提示文案不对: " + t);
+  if (!/无效或无权限/.test(t)) throw new Error("提示文案不对: " + t);
   nextStatus = 200;
 });
 
-await check("断网时回退到缓存（stale）", async () => {
-  reset({ key: "sk-test-123" });
-  config.runsInWidget = true; config.widgetFamily = "small";
-  await mod.main();                       // 先成功一次写缓存
-  nextStatus = 0;
-  script._widget = null;
-  await mod.main();                       // 再断网
-  const t = textsOf(script._widget);
-  if (!t.some((x) => x.includes("离线数据"))) throw new Error("未显示离线标记: " + t.join(" | "));
-  if (!t.some((x) => x.includes("110.00"))) throw new Error("未回退到缓存数值");
-  nextStatus = 200;
-});
-
-await check("余额下降记消费、上升记充值，当日分桶", async () => {
-  reset({ key: "sk-test-123" });
-  config.runsInWidget = true; config.widgetFamily = "small";
-  SAMPLE.balance_infos[0].total_balance = "100.00";
-  await mod.main();                                    // 基准
-  SAMPLE.balance_infos[0].total_balance = "97.50";
-  await mod.main();                                    // -2.50 消费
-  SAMPLE.balance_infos[0].total_balance = "107.50";
-  await mod.main();                                    // +10 充值，不算消费
-  SAMPLE.balance_infos[0].total_balance = "106.00";
-  await mod.main();                                    // -1.50 消费
-  const rec = JSON.parse(files.get(HISTORY)).default;
-  const led = rec.ledger.CNY;
-  const near = (a, b) => Math.abs(a - b) < 1e-6;
-  if (!near(led.consume, 4)) throw new Error("累计消费应为 4，实际 " + led.consume);
-  if (!near(led.recharge, 10)) throw new Error("累计充值应为 10，实际 " + led.recharge);
-  const days = Object.keys(rec.daily.CNY);
-  if (days.length !== 1) throw new Error("当日分桶异常 " + JSON.stringify(rec.daily));
-  if (!near(rec.daily.CNY[days[0]], 4)) throw new Error("当日消费应为 4，实际 " + rec.daily.CNY[days[0]]);
-  return "消费 4.00 / 充值 10.00";
-});
-
-await check("中号/大号在有消费时画折线图（默认）", async () => {
-  reset({ key: "sk-test-123" });
-  config.runsInWidget = true; config.widgetFamily = "large";
-  SAMPLE.balance_infos[0].total_balance = "100.00";
-  await mod.main();
-  SAMPLE.balance_infos[0].total_balance = "96.00";
-  await mod.main();
-  script._widget = null;
-  await mod.main();
-  const imgs = imgsOf(script._widget);
-  if (imgs.length !== 1) throw new Error("图形数量 " + imgs.length);
-  const ops = imgs[0].paths.flatMap((p) => p.ops.map((o) => o[0]));
-  if (ops.includes("roundedRect")) throw new Error("默认不该是柱状: " + ops.join(","));
-  if (!ops.includes("move")) throw new Error("折线缺少路径");
-  const t = textsOf(script._widget).join(" | ");
-  if (!/近 30 天/.test(t)) throw new Error("缺少图表说明: " + t);
-  if (!/合计/.test(t)) throw new Error("说明里没有合计: " + t);
-  config.widgetFamily = "medium"; script._widget = null;
-  await mod.main();
-  if (imgsOf(script._widget).length !== 1) throw new Error("中号没有图形");
-});
-
-await check("近 30 天窗口：窗口内的计入、窗口外的排除", async () => {
-  reset();
-  store.set(KC("default"), "sk-test-123");
-  const dayMs = 86400000;
-  const k = (off) => {
-    const d = new Date(Date.now() - off * dayMs);
-    const p = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-  };
-  // 今天 3.00 + 3 天前 1.00 在 30 天窗口内（合计 4.00）；40 天前的 5.00 必须被排除
-  files.set(HISTORY, JSON.stringify({
-    default: {
-      samples: [],
-      ledger: { CNY: { consume: 6, recharge: 0, since: Date.now() - 45 * dayMs, last: { t: Date.now(), v: 110 } } },
-      daily: { CNY: { [k(0)]: 3, [k(3)]: 1, [k(40)]: 5 } },
-    },
-  }));
-  args.widgetParameter = null;
-  config.runsInWidget = true; config.widgetFamily = "large";
-  await mod.main();
-  const t = textsOf(script._widget).join(" | ");
-  if (!/近 30 天/.test(t)) throw new Error("caption 没有跨度: " + t);
-  if (!/合计 4\.00/.test(t)) throw new Error("窗口合计应为 4.00（40 天前那 5.00 要排除）: " + t);
-  if (!/单日最高 3\.00/.test(t)) throw new Error("单日最高应为 3.00: " + t);
-});
-
-await check("参数写 bar 时改用直方图", async () => {
-  reset({ key: "sk-test-123" });
-  args.widgetParameter = "bar";
-  config.runsInWidget = true; config.widgetFamily = "large";
-  SAMPLE.balance_infos[0].total_balance = "100.00";
-  await mod.main();
-  SAMPLE.balance_infos[0].total_balance = "96.00";
-  await mod.main();
-  script._widget = null;
-  await mod.main();
-  const imgs = imgsOf(script._widget);
-  if (imgs.length !== 1) throw new Error("图形数量 " + imgs.length);
-  const ops = imgs[0].paths.flatMap((p) => p.ops.map((o) => o[0]));
-  if (!ops.includes("roundedRect") && !ops.includes("rect")) throw new Error("bar 模式没有柱子: " + ops.join(","));
-});
-
-await check("没有消费数据时不画图，给文字提示", async () => {
+await check("断网时回退缓存并标明「缓存数据」", async () => {
   reset({ key: "sk-test-123" });
   config.runsInWidget = true; config.widgetFamily = "medium";
-  await mod.main();                                    // 只有基准，没有消费
-  const t = textsOf(script._widget).join(" | ");
-  if (!/暂无消费记录/.test(t)) throw new Error("缺少提示: " + t);
-  if (imgsOf(script._widget).length !== 0) throw new Error("无消费却画了图");
+  await mod.main();
+  nextStatus = 0;
+  script._widget = null;
+  await mod.main();
+  const t = textsOf(script._widget);
+  if (!t.some((x) => x.includes("缓存数据"))) throw new Error("未标明缓存: " + t.join(" | "));
+  if (!t.includes("110.00")) throw new Error("未回退到缓存数值");
+  nextStatus = 200;
 });
 
 await check("赠金为 0 时不显示该字段", async () => {
   reset({ key: "sk-test-123" });
-  SAMPLE.balance_infos[0].granted_balance = "0.00";
-  config.runsInWidget = true; config.widgetFamily = "large";
+  sample = () => ({ is_available: true, balance_infos: [{ currency: "CNY", total_balance: "16.68", granted_balance: "0.00", topped_up_balance: "16.68" }] });
+  config.runsInWidget = true; config.widgetFamily = "large"; script._widget = null;
   await mod.main();
-  if (textsOf(script._widget).includes("赠金")) throw new Error("赠金为 0 仍显示");
-  SAMPLE.balance_infos[0].granted_balance = "5.00";
-  script._widget = null;
-  await mod.main();
-  if (!textsOf(script._widget).includes("赠金")) throw new Error("赠金非 0 却没显示");
+  const t = textsOf(script._widget);
+  if (t.includes("赠金")) throw new Error("赠金为 0 仍显示");
+  if (!t.includes("16.68")) throw new Error("余额显示异常: " + t.join(" | "));
+  sample = () => ({ is_available: true, balance_infos: [
+    { currency: "CNY", total_balance: "110.00", granted_balance: "10.00", topped_up_balance: "100.00" },
+    { currency: "USD", total_balance: "8.20", granted_balance: "0.00", topped_up_balance: "8.20" }] });
 });
 
-await check("旧版历史（纯数组）自动迁移并接上基准", async () => {
-  reset();
-  store.set(KC("default"), "sk-test-123");
-  files.set(HISTORY, JSON.stringify({ default: [{ t: Date.now() - 3600e3, v: 50, c: "CNY" }] }));
-  SAMPLE.balance_infos[0].total_balance = "45.00";
-  config.runsInWidget = true; config.widgetFamily = "small";
+await check("is_available=false 时给出账户不可用提示", async () => {
+  reset({ key: "sk-test-123" });
+  sample = () => ({ is_available: false, balance_infos: [{ currency: "CNY", total_balance: "0.00", granted_balance: "0.00", topped_up_balance: "0.00" }] });
+  config.runsInWidget = true; config.widgetFamily = "medium"; script._widget = null;
   await mod.main();
-  const rec = JSON.parse(files.get(HISTORY)).default;
-  if (Array.isArray(rec)) throw new Error("未迁移成新结构");
-  const c = rec.ledger.CNY.consume;
-  if (Math.abs(c - 5) > 1e-6) throw new Error("迁移后应把 50→45 记为消费 5，实际 " + c);
+  const t = textsOf(script._widget).join(" | ");
+  if (!/账户不可用/.test(t)) throw new Error("未提示不可用: " + t);
+  sample = () => ({ is_available: true, balance_infos: [
+    { currency: "CNY", total_balance: "110.00", granted_balance: "10.00", topped_up_balance: "100.00" },
+    { currency: "USD", total_balance: "8.20", granted_balance: "0.00", topped_up_balance: "8.20" }] });
 });
 
-await check("App 内：无 Key 时能设置 Key（真机崩溃路径）", async () => {
+await check("多币种：大号列出其它币种", async () => {
+  reset({ key: "sk-test-123" });
+  config.runsInWidget = true; config.widgetFamily = "large"; script._widget = null;
+  await mod.main();
+  const t = textsOf(script._widget);
+  if (!t.includes("8.20")) throw new Error("未列出 USD 余额: " + t.join(" | "));
+});
+
+await check("App 内：无 Key 时能设置 Key", async () => {
   reset();
   config.runsInWidget = false;
   choose("设置 API Key");
   type("sk-from-menu-123");
   await mod.main();
   if (store.get(KC("default")) !== "sk-from-menu-123") throw new Error("Key 未写入钥匙串");
-  if (!user.menus[0].includes("尚未保存")) throw new Error("菜单未提示缺少 Key");
 });
 
-await check("App 内：点「预览小组件」调用 presentMedium", async () => {
+await check("App 内：预览小组件调用 presentMedium", async () => {
   reset({ key: "sk-test-123" });
   config.runsInWidget = false;
   choose("预览小组件");
@@ -470,14 +340,13 @@ await check("App 内：点「预览小组件」调用 presentMedium", async () =
   if (!log.includes("presentMedium")) throw new Error("未调用 presentMedium");
 });
 
-await check("App 内：点「复制总余额」写入剪贴板", async () => {
+await check("App 内：复制总余额写入剪贴板", async () => {
   reset({ key: "sk-test-123" });
   config.runsInWidget = false;
   choose("复制总余额");
   await mod.main();
   const hit = log.find((l) => l.startsWith("copy:"));
-  if (!hit) throw new Error("未写入剪贴板");
-  if (!hit.includes("110.00")) throw new Error("复制内容不对: " + hit);
+  if (!hit || !hit.includes("110.00")) throw new Error("复制内容不对: " + hit);
 });
 
 await check("App 内：切换别名后新别名独立存取 Key", async () => {
@@ -492,19 +361,11 @@ await check("App 内：切换别名后新别名独立存取 Key", async () => {
   if (store.get(KC("default")) !== "sk-test-123") throw new Error("default 的 Key 被改动");
 });
 
-await check("App 内：清空历史 + 删除 Key 生效", async () => {
+await check("App 内：删除 Key 后回到未配置状态", async () => {
   reset({ key: "sk-test-123" });
   config.runsInWidget = false;
-  // 预置两条「旧」历史，清空后不应再出现
-  files.set(HISTORY, JSON.stringify({ default: [{ t: 1, v: 999, c: "CNY" }, { t: 2, v: 998, c: "CNY" }] }));
-  choose("清空历史记录", "删除此别名的 Key");
+  choose("删除此别名的 Key");
   await mod.main();
-  const hist = JSON.parse(files.get(HISTORY));
-  const rec = hist.default || {};
-  const samples = Array.isArray(rec) ? rec : rec.samples || [];
-  if (samples.some((h) => h.v > 900)) throw new Error("旧采样未清空: " + JSON.stringify(samples));
-  const led = rec.ledger && rec.ledger.CNY;
-  if (led && led.consume > 0.005) throw new Error("清空后仍有累计消费 " + led.consume);
   if (store.has(KC("default"))) throw new Error("Key 未删除");
 });
 
@@ -527,6 +388,12 @@ await check("严格模式自检：调用不存在的 API 必须报错", async ()
   if (!threw) throw new Error("严格 Proxy 失效，无法拦截虚构 API");
 });
 
+await check("源码不含任何推算/图表残留", async () => {
+  const banned = ["consume", "ledger", "dailySeries", "lineChart", "barChart", "DrawContext", "HISTORY_FILE"];
+  const hit = banned.filter((w) => src.includes(w));
+  if (hit.length) throw new Error("仍存在: " + hit.join(", "));
+});
+
 // ---------------------------------------------------------------- 结果
 
 const width = Math.max(...results.map((r) => r[1].length));
@@ -534,8 +401,6 @@ for (const [st, name, extra] of results) {
   console.log(`${st === "PASS" ? "✅" : "❌"} ${name.padEnd(width)}  ${extra}`);
 }
 const failed = results.filter((r) => r[0] === "FAIL").length;
-if (unknownApi.length) {
-  console.log("\n⚠️ 访问过的未知 API（应只在自检里出现）: " + unknownApi.join(", "));
-}
+if (unknownApi.length) console.log("\n⚠️ 访问过的未知 API（应只在自检里出现）: " + unknownApi.join(", "));
 console.log(`\n${results.length - failed}/${results.length} 通过`);
 process.exit(failed ? 1 : 0);
