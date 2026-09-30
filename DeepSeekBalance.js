@@ -11,7 +11,7 @@
 //   - 留空            使用 default 别名下保存的 Key，显示 CNY（若有）
 //   - work            使用 work 别名下保存的 Key（可管理多个 Key）
 //   - work|USD        使用 work 别名的 Key，主货币显示 USD
-//   - work|USD|line   消费图用折线（默认是直方图 bar）
+//   - work|USD|bar    消费图用直方图（默认是折线 line）
 //   - sk-xxxxxxxx     直接把 Key 写在参数里（不推荐，参数是明文）
 // ============================================================
 
@@ -112,7 +112,7 @@ const historyPath = () => fm().joinPath(fm().documentsDirectory(), HISTORY_FILE)
 // ---------------------------------------------------------------- 参数 / Key
 
 function parseParams(raw) {
-  const out = { alias: DEFAULT_ALIAS, currency: null, chart: "bar", inlineKey: null };
+  const out = { alias: DEFAULT_ALIAS, currency: null, chart: "line", inlineKey: null };
   const s = (raw == null ? "" : String(raw)).trim();
   if (!s) return out;
   if (s.indexOf("sk-") === 0) {
@@ -696,8 +696,8 @@ function buildWidget(state, family) {
   }
 
 
-  // 消费图（中号 / 大号）：默认直方图，参数里写 line 可切折线。
-  // 跨度 13 周 ≈ 一个季度，按周聚合成柱（逐日柱在这宽度下会细成条形码）。
+  // 消费图（中号 / 大号）：默认折线，参数里写 bar 可切直方图。
+  // 跨度 13 周 ≈ 一个季度，按周聚合（逐日点在 13 周跨度上会糊成一团）。
   // 数据来自本机采样：余额下降即消费。
   if (!isSmall && state.rec) {
     const series = weeklySeries(state.rec, primary.currency, CHART_WEEKS);

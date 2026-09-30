@@ -47,18 +47,16 @@ def columns(x, y, items):
         x += 150
 
 
-def spend_bars(x0, y0, x1, y1, values, color=BRAND, mid=(58, 74, 132), faint=(38, 44, 72)):
-    """消费直方图：当天最高的柱子高亮，零消费只留基线。"""
+def spend_line(x0, y0, x1, y1, values, color=BRAND, fill=BRAND_SOFT):
+    """面积 + 折线（季度按周聚合后的 13 个点），末端圆点。"""
     mx = max(values) or 1
     n = len(values)
-    gap = 3
-    bw = (x1 - x0 - gap * (n - 1)) / n
-    for i, v in enumerate(values):
-        h = max(2, (v / mx) * (y1 - y0)) if v > 0 else 2
-        bx = x0 + i * (bw + gap)
-        col = color if v >= mx - 1e-9 else (mid if v > 0 else faint)
-        d.rounded_rectangle((bx, y1 - h, bx + bw, y1), radius=1.5, fill=col)
-    d.line([(x0, y1 + 1), (x1, y1 + 1)], fill=faint, width=1)
+    step = (x1 - x0) / (n - 1)
+    pts = [(x0 + i * step, y1 - (v / mx) * (y1 - y0)) for i, v in enumerate(values)]
+    d.polygon([(x0, y1)] + pts + [(x1, y1)], fill=fill)
+    d.line(pts, fill=color, width=3, joint="curve")
+    px, py = pts[-1]
+    d.ellipse((px - 6, py - 6, px + 6, py + 6), fill=color)
 
 
 # 13 周 ≈ 一个季度（按周聚合的消费）
@@ -72,7 +70,7 @@ card((x0, y0, x1, y1))
 header(x0 + 34, y0 + 32, "DeepSeek 余额")
 big_amount(x0 + 34, y0 + 60, "CNY", "110.00", 74)
 columns(x0 + 34, y0 + 162, LIVE)
-spend_bars(x0 + 40, y0 + 240, x0 + 620, y0 + 320, WEEKLY)
+spend_line(x0 + 40, y0 + 246, x0 + 620, y0 + 318, WEEKLY)
 d.text((x0 + 34, y0 + 334), "近 13 周（约一季度）· 合计 16.40 · 单周最高 3.20", font=f(MSYH, 20), fill=DIM)
 d.text((x0 + 34, y0 + 358), "消费记录自 09-30 14:20 起累计（接口不提供历史账单）", font=f(MSYH, 18), fill=(110, 116, 132))
 d.text((x0 + 34, y1 - 40), "更新 6 分钟前", font=f(MSYH, 20), fill=DIM)
@@ -83,7 +81,7 @@ card((mx0, my0, mx1, my1), radius=40)
 header(mx0 + 30, my0 + 18, "DeepSeek 余额", small=True)
 big_amount(mx0 + 30, my0 + 48, "CNY", "110.00", 54)
 columns(mx0 + 420, my0 + 52, LIVE)
-spend_bars(mx0 + 360, my0 + 106, mx0 + 620, my0 + 132, WEEKLY)
+spend_line(mx0 + 360, my0 + 106, mx0 + 620, my0 + 130, WEEKLY)
 d.text((mx0 + 30, my1 - 34), "更新 6 分钟前", font=f(MSYH, 18), fill=DIM)
 
 # ---------------- 小号（实时） ----------------

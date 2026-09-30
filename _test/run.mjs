@@ -354,7 +354,7 @@ await check("余额下降记消费、上升记充值，当日分桶", async () =
   return "消费 4.00 / 充值 10.00";
 });
 
-await check("中号/大号在有消费时画直方图（默认）", async () => {
+await check("中号/大号在有消费时画折线图（默认）", async () => {
   reset({ key: "sk-test-123" });
   config.runsInWidget = true; config.widgetFamily = "large";
   SAMPLE.balance_infos[0].total_balance = "100.00";
@@ -366,7 +366,8 @@ await check("中号/大号在有消费时画直方图（默认）", async () => 
   const imgs = imgsOf(script._widget);
   if (imgs.length !== 1) throw new Error("图形数量 " + imgs.length);
   const ops = imgs[0].paths.flatMap((p) => p.ops.map((o) => o[0]));
-  if (!ops.includes("roundedRect") && !ops.includes("rect")) throw new Error("没有柱子: " + ops.join(","));
+  if (ops.includes("roundedRect")) throw new Error("默认不该是柱状: " + ops.join(","));
+  if (!ops.includes("move")) throw new Error("折线缺少路径");
   const t = textsOf(script._widget).join(" | ");
   if (!/13 周/.test(t)) throw new Error("缺少图表说明: " + t);
   if (!/合计/.test(t)) throw new Error("说明里没有合计: " + t);
@@ -401,9 +402,9 @@ await check("按周聚合成一个季度（13 周）", async () => {
   if (!/单周最高 4\.00/.test(t)) throw new Error("单周最高应为 4.00: " + t);
 });
 
-await check("参数写 line 时改用折线图", async () => {
+await check("参数写 bar 时改用直方图", async () => {
   reset({ key: "sk-test-123" });
-  args.widgetParameter = "line";
+  args.widgetParameter = "bar";
   config.runsInWidget = true; config.widgetFamily = "large";
   SAMPLE.balance_infos[0].total_balance = "100.00";
   await mod.main();
@@ -414,8 +415,7 @@ await check("参数写 line 时改用折线图", async () => {
   const imgs = imgsOf(script._widget);
   if (imgs.length !== 1) throw new Error("图形数量 " + imgs.length);
   const ops = imgs[0].paths.flatMap((p) => p.ops.map((o) => o[0]));
-  if (ops.includes("roundedRect")) throw new Error("line 模式仍画了柱子");
-  if (!ops.includes("move")) throw new Error("折线缺少路径");
+  if (!ops.includes("roundedRect") && !ops.includes("rect")) throw new Error("bar 模式没有柱子: " + ops.join(","));
 });
 
 await check("没有消费数据时不画图，给文字提示", async () => {
