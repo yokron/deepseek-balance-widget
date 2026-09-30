@@ -4,6 +4,10 @@
 
 方案：**Scriptable 小组件**。不需要 Mac、不需要 Xcode、不需要 Apple 开发者账号，App Store 装一个免费 App 即可。
 
+> **安装页**：<https://yokron.github.io/deepseek-balance-widget/> — iPhone Safari 打开，点「复制脚本」即可。
+> 仓库：<https://github.com/yokron/deepseek-balance-widget>
+
+
 | 文件 | 说明 |
 | --- | --- |
 | [DeepSeekBalance.js](DeepSeekBalance.js) | 小组件脚本本体（复制到 Scriptable 里用） |
@@ -12,6 +16,7 @@
 | [push-to-github.ps1](push-to-github.ps1) | 一键推到你的 GitHub 仓库（含署名、remote、Pages 指引） |
 | [_test/run.mjs](_test/run.mjs) | 开发用：在电脑上模拟 Scriptable 运行环境做回归测试 |
 | [_transfer/serve.mjs](_transfer/serve.mjs) | 局域网静态服务，手机同 Wi-Fi 打开安装页 |
+| [_transfer/gh.mjs](_transfer/gh.mjs) | 没装 `gh` CLI 时用它建仓库 / 开 Pages（走 REST API） |
 
 ---
 
