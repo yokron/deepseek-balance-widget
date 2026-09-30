@@ -16,3 +16,7 @@ desktop.ini
 _transfer/token.ps1
 _transfer/.ghcreds.tmp
 _test/net-probe.mjs
+
+# 一次性排查脚本（含本机路径/凭据文件探查，不发布）
+_test/probe-*.mjs
+_test/net-probe.mjs
