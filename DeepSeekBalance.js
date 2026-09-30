@@ -11,6 +11,7 @@
 //   - 留空            使用 default 别名下保存的 Key，显示 CNY（若有）
 //   - work            使用 work 别名下保存的 Key（可管理多个 Key）
 //   - work|USD        使用 work 别名的 Key，主货币显示 USD
+//   - work|USD|line   消费图用折线（默认是直方图 bar）
 //   - sk-xxxxxxxx     直接把 Key 写在参数里（不推荐，参数是明文）
 // ============================================================
 
@@ -19,7 +20,6 @@ const KC_PREFIX = "deepseek.balance.apikey.";
 const DEFAULT_ALIAS = "default";
 const CACHE_FILE = "deepseek-balance-cache.json";
 const HISTORY_FILE = "deepseek-balance-history.json";
-const USAGE_FILE = "deepseek-usage-cache.json";
 const HISTORY_LIMIT = 96;
 const DAILY_KEEP = 60;
 
@@ -33,14 +33,17 @@ const C = {
   card: Color.dynamic(new Color("#F4F6FF"), new Color("#1B1D24")),
 };
 
-// 折线图下方的面积填充色（低透明度品牌色）。Color(hex, alpha) 万一不支持就退化成不可见填充。
-function softBrand() {
+// 折线图下方的面积填充 / 直方图柱子用的品牌色梯度。
+// Color(hex, alpha) 万一不支持就退化成不可见（图形主体仍能用）。
+function brandShade(alpha) {
   try {
-    return Color.dynamic(new Color("#4D6BFE", 0.16), new Color("#7B93FF", 0.18));
+    return Color.dynamic(new Color("#4D6BFE", alpha), new Color("#7B93FF", alpha));
   } catch (e) {
     return C.card;
   }
 }
+const softBrand = () => brandShade(0.16);
+const midBrand = () => brandShade(0.55);
 
 // ---------------------------------------------------------------- utils
 
@@ -104,12 +107,11 @@ function writeJSON(path, obj) {
 
 const cachePath = () => fm().joinPath(fm().documentsDirectory(), CACHE_FILE);
 const historyPath = () => fm().joinPath(fm().documentsDirectory(), HISTORY_FILE);
-const usagePath = () => fm().joinPath(fm().documentsDirectory(), USAGE_FILE);
 
 // ---------------------------------------------------------------- 参数 / Key
 
 function parseParams(raw) {
-  const out = { alias: DEFAULT_ALIAS, currency: null, inlineKey: null, usageUrl: null };
+  const out = { alias: DEFAULT_ALIAS, currency: null, chart: "bar", inlineKey: null };
   const s = (raw == null ? "" : String(raw)).trim();
   if (!s) return out;
   if (s.indexOf("sk-") === 0) {
@@ -117,10 +119,12 @@ function parseParams(raw) {
     return out;
   }
   const parts = s.split("|").map((x) => x.trim()).filter((x) => x.length > 0);
-  // 任意一段是 http(s) 链接就当成 token 用量 JSON 的地址（第 3 段）
-  const urlPart = parts.find((p) => /^https?:\/\//i.test(p));
-  if (urlPart) out.usageUrl = urlPart;
-  const positional = parts.filter((p) => !/^https?:\/\//i.test(p));
+  const positional = [];
+  parts.forEach((p) => {
+    const low = p.toLowerCase();
+    if (low === "bar" || low === "line") out.chart = low;
+    else positional.push(p);
+  });
   if (positional[0]) out.alias = positional[0];
   if (positional[1]) out.currency = positional[1].toUpperCase();
   return out;
@@ -342,69 +346,6 @@ function dailySeries(rec, currency, days) {
   return out;
 }
 
-// ---------------------------------------------------------------- token 用量
-//
-// 手机端拿不到 token 数：官方没有用量接口，usage 只存在于「发起请求的那一方」，
-// 而调用是电脑上的 DSH 发出的。所以电脑端（_transfer/usage-stats.mjs）统计好、
-// 发布成一份 JSON（私密 Gist 或仓库），小组件按小组件参数里给的 URL 去读，
-// 并在本地缓存一份供离线/失败时使用。
-
-async function fetchUsage(url) {
-  const req = new Request(url);
-  req.method = "GET";
-  req.timeoutInterval = 20;
-  req.headers = { Accept: "application/json", "Cache-Control": "no-cache" };
-  let body = "";
-  let status = 0;
-  try {
-    body = await req.loadString();
-    status = req.response ? req.response.statusCode : 200;
-  } catch (e) {
-    return null;
-  }
-  if (status !== 200) return null;
-  try {
-    const j = JSON.parse(body);
-    if (!j || !j.totals || !Array.isArray(j.daily)) return null;
-    return j;
-  } catch (e) {
-    return null;
-  }
-}
-
-function saveUsageCache(url, data) {
-  writeJSON(usagePath(), { url, data });
-}
-
-function loadUsageCache(url) {
-  const c = readJSON(usagePath(), null);
-  if (c && c.data && (!url || c.url === url)) return c.data;
-  return null;
-}
-
-async function resolveUsage(url) {
-  if (!url) return null;
-  const fresh = await fetchUsage(url);
-  if (fresh) {
-    saveUsageCache(url, fresh);
-    return fresh;
-  }
-  return loadUsageCache(url);
-}
-
-function fmtTokens(n) {
-  const v = Number(n) || 0;
-  if (v >= 1e8) return (v / 1e8).toFixed(2) + "亿";
-  if (v >= 1e4) return (v / 1e4).toFixed(1) + "万";
-  return String(Math.round(v));
-}
-
-function usageToday(usage) {
-  if (!usage || !Array.isArray(usage.daily) || !usage.daily.length) return null;
-  const key = dayKey(Date.now());
-  return usage.daily.find((d) => d.day === key) || usage.daily[usage.daily.length - 1];
-}
-
 // ---------------------------------------------------------------- 数据准备
 
 function pickPrimary(balanceInfos, prefer) {
@@ -491,6 +432,46 @@ function lineChart(values, width, height, color, fillColor) {
   ctx.addPath(dot);
   ctx.setFillColor(color);
   ctx.fillPath();
+
+  return ctx.getImage();
+}
+
+// 直方图：每日消费的柱子，最后一项是今天；零消费的日子只留一条基线。
+function barChart(values, width, height, maxColor, midColor, faintColor) {
+  if (!values || values.length < 2) return null;
+
+  const ctx = new DrawContext();
+  ctx.size = new Size(width, height);
+  ctx.opaque = false;
+  ctx.respectScreenScale = true;
+
+  const max = Math.max.apply(null, values);
+  const span = max > 0 ? max : 1;
+  const n = values.length;
+  const gap = 2;
+  const bw = (width - gap * (n - 1)) / n;
+  const base = height - 1;
+  const usable = height - 4;
+
+  values.forEach((v, i) => {
+    const h = v > 0 ? Math.max(2, (v / span) * usable) : 1;
+    const x = i * (bw + gap);
+    const rect = new Rect(Math.round(x), Math.round(base - h), Math.max(1, Math.round(bw)), Math.round(h));
+    const p = new Path();
+    if (typeof p.addRoundedRect === "function") p.addRoundedRect(rect, 1.5, 1.5);
+    else p.addRect(rect);
+    ctx.addPath(p);
+    ctx.setFillColor(v <= 0 ? faintColor : v >= max - 1e-9 ? maxColor : midColor);
+    ctx.fillPath();
+  });
+
+  const line = new Path();
+  line.move(new Point(0, base + 0.5));
+  line.addLine(new Point(width, base + 0.5));
+  ctx.addPath(line);
+  ctx.setStrokeColor(faintColor);
+  ctx.setLineWidth(0.5);
+  ctx.strokePath();
 
   return ctx.getImage();
 }
@@ -692,41 +673,23 @@ function buildWidget(state, family) {
     o.lineLimit = 1;
   }
 
-  // token 用量（数据来自电脑端发布，见文件头注释）
-  if (state.usage) {
-    const t = usageToday(state.usage);
-    if (t) {
-      w.addSpacer(isSmall ? 4 : 6);
-      const line = w.addText("今日 " + fmtTokens(t.total) + " tok · ¥" + t.cost.toFixed(2));
-      line.font = mono(isSmall ? 10 : 11, false);
-      line.textColor = C.text;
-      line.lineLimit = 1;
-      line.minimumScaleFactor = 0.7;
 
-      if (isLarge) {
-        w.addSpacer(2);
-        const sub = w.addText(
-          "近 " + state.usage.days + " 天 " + fmtTokens(state.usage.totals.total) + " tok · ¥" +
-            state.usage.totals.cost.toFixed(2) + " · 数据 " + relTime(state.usage.generatedAt)
-        );
-        sub.font = Font.systemFont(9);
-        sub.textColor = C.dim;
-        sub.lineLimit = 1;
-        sub.minimumScaleFactor = 0.7;
-      }
-    }
-  }
-
-  // 消费折线图（中号 / 大号）。数据来自本机采样：余额下降即消费。
+  // 消费图（中号 / 大号）：默认直方图，参数里写 line 可切折线。
+  // 数据来自本机采样：余额下降即消费。
   if (!isSmall && state.rec) {
     const days = isLarge ? 14 : 10;
     const values = dailySeries(state.rec, primary.currency, days).map((s) => s.value);
     const dayMax = Math.max.apply(null, values);
+    const daySum = values.reduce((a, b) => a + b, 0);
     const led = ledgerFor(state.rec, primary.currency);
 
     w.addSpacer(isLarge ? 8 : 6);
     if (dayMax > 0.005) {
-      const img = lineChart(values, isLarge ? 285 : 255, isLarge ? 58 : 34, C.brand, softBrand());
+      const cw = isLarge ? 285 : 255;
+      const ch = isLarge ? 58 : 34;
+      const img = state.chart === "line"
+        ? lineChart(values, cw, ch, C.brand, softBrand())
+        : barChart(values, cw, ch, C.brand, midBrand(), softBrand());
       if (img) {
         const box = stack(w);
         box.centerAlignContent();
@@ -734,7 +697,7 @@ function buildWidget(state, family) {
         w.addSpacer(3);
       }
       const cap = w.addText(
-        "近 " + days + " 天每日消费 · 最高 " + dayMax.toFixed(2) +
+        "近 " + days + " 天每日消费 · 最高 " + dayMax.toFixed(2) + " · 合计 " + daySum.toFixed(2) +
           (led.since ? " · 累计 " + led.consume.toFixed(2) : "")
       );
       cap.font = Font.systemFont(9);
@@ -780,29 +743,18 @@ function detailText(state) {
     lines.push("");
   });
   lines.push("抓取时间：" + clockTime(state.data.fetchedAt) + "（" + relTime(state.data.fetchedAt) + "）");
-  lines.push("累计消费由余额变化推算（接口不提供用量数据）");
+  lines.push("累计消费由余额变化推算（官方接口只提供余额）");
 
-  if (state.usage) {
-    const t = usageToday(state.usage);
-    lines.push("");
-    lines.push("[DSH 本地统计的 token 用量]");
-    lines.push("  今日：" + fmtTokens(t ? t.total : 0) + " tok · 约 ¥" + (t ? t.cost.toFixed(2) : "0.00"));
-    lines.push("  近 " + state.usage.days + " 天：" + fmtTokens(state.usage.totals.total) + " tok · 约 ¥" + state.usage.totals.cost.toFixed(2));
-    lines.push("  请求 " + state.usage.totals.calls + " 次 · 数据 " + relTime(state.usage.generatedAt));
-  } else {
-    lines.push("");
-    lines.push("token 用量：未配置数据源（小组件参数第 3 段填 JSON 地址）");
-  }
   return lines.join("\n");
 }
 
-async function runInApp(initialAlias, usageUrl) {
+async function runInApp(initialAlias, chart) {
   let alias = initialAlias;
   const fam = Device.screenSize().width > 400 ? "medium" : "small";
 
   for (;;) {
     const state = await resolveState(alias, null);
-    state.usage = await resolveUsage(usageUrl);
+    state.chart = chart;
     const hasKey = !!storedKey(alias);
 
     const a = new Alert();
@@ -879,13 +831,13 @@ async function main() {
   if (params.inlineKey) Keychain.set(keychainKey(alias), params.inlineKey);
 
   if (!config.runsInWidget) {
-    await runInApp(alias, params.usageUrl);
+    await runInApp(alias, params.chart);
     return;
   }
 
   const family = config.widgetFamily || "small";
   const state = await resolveState(alias, params.currency);
-  state.usage = await resolveUsage(params.usageUrl);
+  state.chart = params.chart;
   const w = buildWidget(state, family);
   Script.setWidget(w);
   Script.complete();

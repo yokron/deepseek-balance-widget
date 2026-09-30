@@ -17,8 +17,7 @@
 | [_test/run.mjs](_test/run.mjs) | 开发用：在电脑上模拟 Scriptable 运行环境做回归测试 |
 | [_transfer/serve.mjs](_transfer/serve.mjs) | 局域网静态服务，手机同 Wi-Fi 打开安装页 |
 | [_transfer/gh.mjs](_transfer/gh.mjs) | 没装 `gh` CLI 时用它建仓库 / 开 Pages（走 REST API） |
-| [_transfer/usage-stats.mjs](_transfer/usage-stats.mjs) | 从 DSH 本地会话日志统计**真实 token 用量**与估算费用 |
-| [_transfer/publish-usage.mjs](_transfer/publish-usage.mjs) | 把统计结果发布到私密 Gist，供手机小组件读取 |
+| [_transfer/usage-stats.mjs](_transfer/usage-stats.mjs) | 可选：在电脑上统计 DSH 的真实 token 用量与估算费用（不参与小组件） |
 | [_transfer/pin-proxy.mjs](_transfer/pin-proxy.mjs) | 网络阻断 `github.com` 时，用固定 IP 代理完成 push |
 
 ---
@@ -111,10 +110,10 @@ node _transfer/serve.mjs
 | *（留空）* | 用 `default` 别名保存的 Key，主货币自动选 CNY |
 | `work` | 用 `work` 别名保存的 Key（脚本菜单里可切换/新增别名，管理多个 Key） |
 | `work\|USD` | 用 `work` 的 Key，主货币显示 USD |
-| `work\|USD\|https://...` | 第 3 段是 **token 用量 JSON 的地址**（见 [第十二节](#十二token-消耗量真实数据)），填了就显示今日 token |
+| `work\|USD\|line` | 消费图从直方图（默认 `bar`）改成折线图 |
 | `sk-xxxxxxxx` | 直接把 Key 写在参数里（**明文，不推荐**） |
 
-> 任意一段以 `http` 开头都会被当作 token 数据源地址，位置不固定；其余段按顺序是「别名 | 货币」。
+> 参数里任意一段写 `bar` 或 `line` 就是图形样式，其余段按顺序是「别名 | 货币」。
 
 添加多个小组件、填不同别名，就能在一屏里同时盯多个账号。
 
@@ -127,8 +126,7 @@ node _transfer/serve.mjs
 - **累计消费**：`累计消费` 是**本机推算**的 —— 余额下降记为消费、上升记为充值，从脚本第一次记录开始累计。
   > ⚠️ 官方没有用量/账单查询接口，所以这是**唯一**能拿到的消费数据，且**无法回溯**脚本开始记录之前的消费。
   > 采样频率不影响总额正确性（两次观测之间的变化都会被计入），只影响「记在哪一天」。
-- **消费折线图**：中号显示近 10 天、大号显示近 14 天的**每日消费**曲线（带面积填充）；还没有消费数据时显示文字提示。
-- **token 用量**（配置了数据源才显示）：如 `今日 1.14亿 tok · ¥11.64`，大号还会多一行「近 N 天 … · 数据 X 分钟前」。来源见 [第十二节](#十二token-消耗量真实数据)。
+- **消费直方图**：中号显示近 10 天、大号显示近 14 天的**每日消费柱子**（当天最高的柱子用品牌色高亮，零消费的日子只留基线）；参数里写 `line` 可切成折线（带面积填充）。还没有消费数据时显示文字提示。
 - **多币种**：中号/大号会额外列出一行其它币种（如 `USD 8.20`）。
 - **底部时间**：`更新 12 分钟前`；离线时显示 `离线数据 · 3 小时前`。
 
@@ -141,7 +139,7 @@ node _transfer/serve.mjs
 | 设置 / 更换 API Key | 写入或覆盖当前别名的 Key |
 | 切换 / 新增别名 | 管理多套 Key |
 | 复制总余额 | 复制到剪贴板 |
-| 清空历史记录 | 清掉采样、累计消费与折线数据 |
+| 清空历史记录 | 清掉采样、累计消费与消费图数据 |
 | 删除此别名的 Key | 从钥匙串移除 |
 
 ---
@@ -175,9 +173,11 @@ Authorization: Bearer sk-xxxxxxxx
 
 脚本对 `401/403`（Key 无效）、`402`（余额不足）、`429`（限流）、`5xx`、断网分别给了不同的提示文案。
 
-### 为什么余额接口里没有 token 消耗量
+### 为什么没有 token 消耗量
 
-**官方没有任何用量/账单查询接口。** 整个 API 文档只有：Chat Completions、Responses、FIM 补全、获取模型列表、查询余额、Files。token 数只存在于**每次 API 响应的 `usage` 字段**里 —— 也就是「谁发起调用谁才知道」。手机从没调用过 API，所以**物理上拿不到**这些数字。解法见 [第十二节](#十二token-消耗量真实数据)。
+**官方没有任何用量/账单查询接口。** 整个 API 文档只有：Chat Completions、Responses、FIM 补全、获取模型列表、查询余额、Files。token 数只存在于**每次 API 响应的 `usage` 字段**里 —— 也就是「谁发起调用谁才知道」；而调用是你在电脑上发起的，手机从没调过 API，所以**物理上拿不到**这些数字。
+
+所以本小组件只做**钱**：余额来自官方接口，已消费与每日消费来自余额采样台账（纯本机推算，零外部依赖，不会因为某个数据源挂掉而失效）。如果你只是想在电脑上看看 token 用量，`node _transfer/usage-stats.mjs --days 14` 可以从 DSH 会话日志里算出真实数值。
 
 ## 九、推到自己的 GitHub（推荐）
 
@@ -254,13 +254,11 @@ node _test/run.mjs
 ✅ 401 时给出 Key 无效组件
 ✅ 断网时回退到缓存（stale）
 ✅ 余额下降记消费、上升记充值，当日分桶
-✅ 中号/大号在有消费时画折线图
+✅ 中号/大号在有消费时画直方图（默认）
+✅ 参数写 line 时改用折线图
 ✅ 没有消费数据时不画图，给文字提示
 ✅ 赠金为 0 时不显示该字段
 ✅ 旧版历史（纯数组）自动迁移并接上基准
-✅ 参数第 3 段的 usage URL 生效并显示今日 token
-✅ usage 拉取失败时回退本地缓存
-✅ 未配置 usage URL 时不显示 token 行
 ✅ App 内：无 Key 时能设置 Key（真机崩溃路径）
 ✅ App 内：点「预览小组件」调用 presentMedium
 ✅ App 内：点「复制总余额」写入剪贴板
@@ -269,64 +267,12 @@ node _test/run.mjs
 ✅ App 内：一直取消能正常退出
 ✅ 严格模式自检：调用不存在的 API 必须报错
 
-20/20 通过
+18/18 通过
 ```
 
 > stub 只能验证逻辑与 API 用法，真机渲染效果仍需在 iPhone 上看一眼。
 
-## 十二、token 消耗量（真实数据）
-
-手机拿不到 token 数（原因见 [第八节](#为什么余额接口里没有-token-消耗量)），所以由**电脑端统计 + 发布**，手机端只负责读。
-
-### 数据从哪来
-
-DSH 把每个会话存成 `~/.dsh/sessions/<工作区>/<会话>/session.v4.jsonl.zstd`（多帧 zstd），每次请求都带真实用量：
-
-```json
-"usage": {"inputTokens":6570,"outputTokens":3181,"cacheReadTokens":1024,"totalTokens":10775}
-```
-
-字段与官方计费口径一一对应：`cacheReadTokens` = 输入·缓存命中，`inputTokens` = 输入·缓存未命中，`outputTokens` = 输出。
-
-```powershell
-node _transfer/usage-stats.mjs --days 14      # 只统计并在终端打印
-```
-
-> 为什么不「用消费金额反推 token」：官方 `deepseek-flash` 空闲时段，缓存命中输入 **0.02 元/百万**、输出 **4 元/百万**，差 200 倍。同样 1 元钱可能是 5000 万命中输入，也可能是 25 万输出，反推误差几十倍 —— 所以宁可走真实数据。
-
-### 发布到手机能读的地方
-
-```powershell
-. .\_transfer\token.ps1                    # 从凭据管理器取出 GitHub token
-node _transfer\publish-usage.mjs --days 30 # 创建/更新「私密 Gist」并打印地址
-```
-
-- 首次会自动创建一个 **unlisted 私密 Gist**（只有持 URL 的人能看，内容仅数字，无对话内容），id 记在 `_transfer/.usage-gist.json`（已 gitignore）。
-- 之后每次执行就是一次 `PATCH`，地址不变。
-
-### 手机端配置
-
-在小组件参数第 3 段填上 Gist 的 raw 地址（类似）：
-
-```
-default|CNY|https://gist.githubusercontent.com/<用户名>/<gist-id>/raw/deepseek-usage.json
-```
-
-小组件会显示 `今日 1.14亿 tok · ¥11.64`（大号多一行近 N 天合计 + 数据时间），并把 JSON 缓存在本地 —— 网络失败时继续用上次的数据，不会空掉。
-
-### 什么时候发布
-
-`publish-usage.mjs` 是**搬运工**：它不产生数据，只是把电脑上已有的数字抄到手机能读的地方。所以想让它保持最新，挑一种即可：
-
-| 方式 | 做法 | 特点 |
-| --- | --- | --- |
-| 手动 | 想看手机上前跑一次上面的命令 | 零常驻，数据停在上次发布时 |
-| 计划任务 | `schtasks /create /tn DSH用量发布 /tr "node _transfer\publish-usage.mjs" /sc minute /mo 30` | 电脑开着就自动，推荐 |
-| DSH 插件 | 在回合结束事件里调用 collectUsage() | 最新，但要写插件 |
-
-> 想停止发布：删掉那个 Gist（<https://gist.github.com>）并把小组件参数第 3 段清空即可，其余功能不受影响。
-
-## 十三、想要「真·原生 App」？
+## 十二、想要「真·原生 App」？
 
 脚本方案零成本、可立刻用。如果你有 Mac + Xcode 且想要：
 - 独立 App（可上架 / 自签）、Key 存 Keychain 并支持 Face ID 解锁；

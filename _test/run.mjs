@@ -60,24 +60,7 @@ const SAMPLE = {
 
 let nextStatus = 200;
 let requestCount = 0;
-let usageFails = false;
 const log = [];
-
-const todayKey = (() => {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-})();
-
-const USAGE_SAMPLE = {
-  generatedAt: Date.now(),
-  days: 14,
-  totals: { cacheMiss: 1755130, cacheHit: 172790144, output: 1099857, total: 175645131, cost: 17.4862, calls: 1068 },
-  daily: [
-    { day: "2026-09-28", cacheMiss: 548179, cacheHit: 52860288, output: 371834, total: 53780301, cost: 5.3609, calls: 438 },
-    { day: todayKey, cacheMiss: 1194253, cacheHit: 111839744, output: 710547, total: 113744544, cost: 11.6365, calls: 606 },
-  ],
-};
 
 class ColorImpl {
   constructor(hex, alpha) {
@@ -105,6 +88,12 @@ class PathImpl {
   move(p) { if (!(p instanceof PointImpl)) throw new Error("Path.move 需要 Point"); this.ops.push(["move", p]); }
   addLine(p) { this.ops.push(["line", p]); }
   addEllipse(r) { if (!(r instanceof RectImpl)) throw new Error("Path.addEllipse 需要 Rect"); this.ops.push(["ellipse", r]); }
+  addRect(r) { if (!(r instanceof RectImpl)) throw new Error("Path.addRect 需要 Rect"); this.ops.push(["rect", r]); }
+  addRoundedRect(r, cw, ch) {
+    if (!(r instanceof RectImpl)) throw new Error("Path.addRoundedRect 需要 Rect");
+    if (typeof cw !== "number" || typeof ch !== "number") throw new Error("Path.addRoundedRect 需要圆角数值");
+    this.ops.push(["roundedRect", r]);
+  }
 }
 class LinearGradientImpl {
   constructor() { this.colors = []; this.locations = []; this.startPoint = null; this.endPoint = null; return strict(this, "LinearGradient"); }
@@ -185,12 +174,8 @@ class RequestImpl {
     return strict(this, "Request");
   }
   async loadString() {
-    log.push("GET " + this.url + " status=" + nextStatus);
-    if (/usage/i.test(this.url)) {
-      if (usageFails) throw new Error("network down");
-      return JSON.stringify(USAGE_SAMPLE);
-    }
     requestCount++;
+    log.push("GET " + this.url + " status=" + nextStatus);
     if (nextStatus === 0) throw new Error("network down");
     if (nextStatus === 401) return JSON.stringify({ error: { message: "Authentication Fails" } });
     return JSON.stringify(SAMPLE);
@@ -369,7 +354,7 @@ await check("余额下降记消费、上升记充值，当日分桶", async () =
   return "消费 4.00 / 充值 10.00";
 });
 
-await check("中号/大号在有消费时画折线图", async () => {
+await check("中号/大号在有消费时画直方图（默认）", async () => {
   reset({ key: "sk-test-123" });
   config.runsInWidget = true; config.widgetFamily = "large";
   SAMPLE.balance_infos[0].total_balance = "100.00";
@@ -379,13 +364,32 @@ await check("中号/大号在有消费时画折线图", async () => {
   script._widget = null;
   await mod.main();
   const imgs = imgsOf(script._widget);
-  if (imgs.length !== 1) throw new Error("折线图数量 " + imgs.length);
-  if (!imgs[0].paths || imgs[0].paths.length < 2) throw new Error("折线/面积路径缺失");
+  if (imgs.length !== 1) throw new Error("图形数量 " + imgs.length);
+  const ops = imgs[0].paths.flatMap((p) => p.ops.map((o) => o[0]));
+  if (!ops.includes("roundedRect") && !ops.includes("rect")) throw new Error("没有柱子: " + ops.join(","));
   const t = textsOf(script._widget).join(" | ");
   if (!/每日消费/.test(t)) throw new Error("缺少图表说明: " + t);
+  if (!/合计/.test(t)) throw new Error("说明里没有合计: " + t);
   config.widgetFamily = "medium"; script._widget = null;
   await mod.main();
-  if (imgsOf(script._widget).length !== 1) throw new Error("中号没有折线图");
+  if (imgsOf(script._widget).length !== 1) throw new Error("中号没有图形");
+});
+
+await check("参数写 line 时改用折线图", async () => {
+  reset({ key: "sk-test-123" });
+  args.widgetParameter = "line";
+  config.runsInWidget = true; config.widgetFamily = "large";
+  SAMPLE.balance_infos[0].total_balance = "100.00";
+  await mod.main();
+  SAMPLE.balance_infos[0].total_balance = "96.00";
+  await mod.main();
+  script._widget = null;
+  await mod.main();
+  const imgs = imgsOf(script._widget);
+  if (imgs.length !== 1) throw new Error("图形数量 " + imgs.length);
+  const ops = imgs[0].paths.flatMap((p) => p.ops.map((o) => o[0]));
+  if (ops.includes("roundedRect")) throw new Error("line 模式仍画了柱子");
+  if (!ops.includes("move")) throw new Error("折线缺少路径");
 });
 
 await check("没有消费数据时不画图，给文字提示", async () => {
@@ -420,40 +424,6 @@ await check("旧版历史（纯数组）自动迁移并接上基准", async () =
   if (Array.isArray(rec)) throw new Error("未迁移成新结构");
   const c = rec.ledger.CNY.consume;
   if (Math.abs(c - 5) > 1e-6) throw new Error("迁移后应把 50→45 记为消费 5，实际 " + c);
-});
-
-await check("参数第 3 段的 usage URL 生效并显示今日 token", async () => {
-  reset({ key: "sk-test-123" });
-  args.widgetParameter = "default|CNY|https://example.com/deepseek-usage.json";
-  config.runsInWidget = true; config.widgetFamily = "large";
-  await mod.main();
-  const t = textsOf(script._widget).join(" | ");
-  if (!/今日 1\.14亿 tok · ¥11\.64/.test(t)) throw new Error("今日 token 行不对: " + t);
-  if (!/近 14 天 1\.76亿 tok · ¥17\.49/.test(t)) throw new Error("近 14 天行缺失: " + t);
-  const cached = JSON.parse(files.get("/mock/Documents/deepseek-usage-cache.json"));
-  if (!cached || !cached.data || cached.data.totals.total !== 175645131) throw new Error("usage 未落缓存");
-});
-
-await check("usage 拉取失败时回退本地缓存", async () => {
-  reset({ key: "sk-test-123" });
-  args.widgetParameter = "https://example.com/deepseek-usage.json";
-  config.runsInWidget = true; config.widgetFamily = "medium";
-  await mod.main();                                   // 先成功一次
-  usageFails = true;
-  script._widget = null;
-  await mod.main();                                   // 再失败
-  const t = textsOf(script._widget).join(" | ");
-  if (!/今日/.test(t)) throw new Error("未回退到缓存: " + t);
-  usageFails = false;
-});
-
-await check("未配置 usage URL 时不显示 token 行", async () => {
-  reset({ key: "sk-test-123" });
-  args.widgetParameter = null;
-  config.runsInWidget = true; config.widgetFamily = "large";
-  await mod.main();
-  const t = textsOf(script._widget).join(" | ");
-  if (/tok/.test(t)) throw new Error("不该出现 token 行: " + t);
 });
 
 await check("App 内：无 Key 时能设置 Key（真机崩溃路径）", async () => {
