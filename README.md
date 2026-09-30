@@ -1,6 +1,6 @@
 # DeepSeek API 余额 · iOS 桌面小组件
 
-在 iPhone / iPad 主屏上直接看 DeepSeek 开放平台账户余额（总额、赠送、充值、已用、多币种、历史走势）。
+在 iPhone / iPad 主屏上直接看 DeepSeek 开放平台**账户余额**（总可用余额、赠金构成、充值构成、多币种、历史走势）。
 
 方案：**Scriptable 小组件**。不需要 Mac、不需要 Xcode、不需要 Apple 开发者账号，App Store 装一个免费 App 即可。
 
@@ -116,7 +116,10 @@ node _transfer/serve.mjs
 
 - **圆点颜色**：绿 = 实时数据，黄 = 网络失败正在显示缓存，红 = 出错 / 未配 Key。
 - **大号数字**：主货币总额（`total_balance`）。
-- **赠送 / 充值 / 已用**：`granted_balance`、`topped_up_balance`，以及两者之和减总额得到的已用量。
+- **赠金 / 充值**：`granted_balance`（未过期的赠金余额）与 `topped_up_balance`（充值余额），两者之和即上面的总额。
+  > 显示的是**账户余额**，不是 token 用量。接口是官方 `GET /user/balance`（[文档](https://api-docs.deepseek.com/zh-cn/api/get-user-balance)），
+  > 字段含义：`total_balance` = 总的可用余额（含赠金+充值）。token 消耗 / 消费金额请看 [platform.deepseek.com/usage](https://platform.deepseek.com/usage)，
+  > 该数据**没有公开 API**，所以小组件取不到。
 - **多币种**：中号/大号会额外列出一行其它币种（如 `USD 8.20`）。
 - **大号尺寸**：底部的迷你折线是最近若干次抓取的总余额走势（本地最多存 96 条）。
 - **底部时间**：`更新 12 分钟前`；离线时显示 `离线数据 · 3 小时前`。

@@ -45,7 +45,7 @@ d.text((x0 + 60, y0 + 32), "DeepSeek 余额", font=f(MSYHB, 26), fill=DIM)
 d.text((x0 + 34, y0 + 78), "CNY", font=f(MSYHB, 26), fill=DIM)
 d.text((x0 + 110, y0 + 58), "110.00", font=f(CONSB, 74), fill=TEXT)
 
-labels = [("赠送", "10.00", TEXT), ("充值", "100.00", TEXT), ("已用", "36.42", WARN)]
+labels = [("赠金", "10.00", TEXT), ("充值", "100.00", TEXT)]
 cx = x0 + 34
 for name, val, col in labels:
     d.text((cx, y0 + 162), name, font=f(MSYH, 20), fill=DIM)
@@ -74,7 +74,7 @@ d.text((mx0 + 56, my0 + 18), "DeepSeek 余额", font=f(MSYHB, 24), fill=DIM)
 d.text((mx0 + 30, my0 + 62), "CNY", font=f(MSYHB, 22), fill=DIM)
 d.text((mx0 + 92, my0 + 48), "110.00", font=f(CONSB, 54), fill=TEXT)
 cx = mx0 + 420
-for name, val in [("赠送", "10.00"), ("充值", "100.00")]:
+for name, val in [("赠金", "10.00"), ("充值", "100.00")]:
     d.text((cx, my0 + 52), name, font=f(MSYH, 18), fill=DIM)
     d.text((cx, my0 + 74), val, font=f(CONS, 24), fill=TEXT)
     cx += 120
@@ -87,7 +87,7 @@ d.ellipse((sx0 + 28, sy0 + 30, sx0 + 40, sy0 + 42), fill=OK)
 d.text((sx0 + 50, sy0 + 22), "DeepSeek", font=f(MSYHB, 22), fill=DIM)
 d.text((sx0 + 28, sy0 + 66), "CNY", font=f(MSYHB, 20), fill=DIM)
 d.text((sx0 + 28, sy0 + 92), "110.00", font=f(CONSB, 52), fill=TEXT)
-d.text((sx0 + 28, sy0 + 168), "赠送", font=f(MSYH, 17), fill=DIM)
+d.text((sx0 + 28, sy0 + 168), "赠金", font=f(MSYH, 17), fill=DIM)
 d.text((sx0 + 28, sy0 + 190), "10.00", font=f(CONS, 22), fill=TEXT)
 d.text((sx0 + 150, sy0 + 168), "充值", font=f(MSYH, 17), fill=DIM)
 d.text((sx0 + 150, sy0 + 190), "100.00", font=f(CONS, 22), fill=TEXT)
@@ -101,7 +101,7 @@ d.ellipse((ox0 + 28, oy0 + 30, ox0 + 40, oy0 + 42), fill=WARN)
 d.text((ox0 + 50, oy0 + 22), "DeepSeek", font=f(MSYHB, 22), fill=DIM)
 d.text((ox0 + 28, oy0 + 66), "CNY", font=f(MSYHB, 20), fill=DIM)
 d.text((ox0 + 28, oy0 + 92), "110.00", font=f(CONSB, 52), fill=(170, 174, 186))
-d.text((ox0 + 28, oy0 + 168), "赠送", font=f(MSYH, 17), fill=DIM)
+d.text((ox0 + 28, oy0 + 168), "赠金", font=f(MSYH, 17), fill=DIM)
 d.text((ox0 + 28, oy0 + 190), "10.00", font=f(CONS, 22), fill=(170, 174, 186))
 d.text((ox0 + 150, oy0 + 168), "充值", font=f(MSYH, 17), fill=DIM)
 d.text((ox0 + 150, oy0 + 190), "100.00", font=f(CONS, 22), fill=(170, 174, 186))
@@ -110,8 +110,8 @@ d.ellipse((ox0 + 30, oy1 - 34, ox0 + 40, oy1 - 24), fill=WARN)
 d.text((ox0 + 48, oy1 - 40), "网络不可用或请求超时", font=f(MSYH, 16), fill=WARN)
 
 # 底部说明
-d.text((80, 30), "DeepSeek API 余额 · Scriptable 小组件效果示意", font=f(MSYHB, 34), fill=TEXT)
-d.text((80, 74), "左：大号 / 中号  右：小号（实时）与小号（离线缓存）", font=f(MSYH, 22), fill=DIM)
+d.text((80, 30), "DeepSeek 账户余额 · Scriptable 小组件效果示意", font=f(MSYHB, 34), fill=TEXT)
+d.text((80, 74), "左：大号 / 中号  右：小号（实时）与小号（离线缓存）· 数字为示例数据", font=f(MSYH, 22), fill=DIM)
 
 img.save("preview.png")
 print("preview.png", img.size)

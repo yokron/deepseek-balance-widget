@@ -386,10 +386,14 @@ function buildDetailRows(root, primary, compact) {
     t2.textColor = color || C.text;
   };
 
-  mk("赠送", toNumber(primary.granted).toFixed(2));
+  // 接口语义（官方文档 /user/balance）：
+  //   total_balance      = 总的可用余额，包括赠金和充值余额
+  //   granted_balance    = 未过期的赠金余额
+  //   topped_up_balance  = 充值余额
+  // 即 total = granted + toppedUp，所以这里只列构成，不推导"已用"
+  // （曾经加过一行"已用 = 赠送+充值-总额"，它恒为 0，容易让人误以为显示的是用量）
+  mk("赠金", toNumber(primary.granted).toFixed(2));
   mk("充值", toNumber(primary.toppedUp).toFixed(2));
-  const used = Math.max(0, toNumber(primary.granted) + toNumber(primary.toppedUp) - toNumber(primary.total));
-  if (used > 0.005) mk("已用", used.toFixed(2), C.warn);
   return row;
 }
 
@@ -535,7 +539,7 @@ function detailText(state) {
   (state.data.balanceInfos || []).forEach((b) => {
     lines.push("[" + b.currency + "]");
     lines.push("  总额：" + toNumber(b.total).toFixed(2));
-    lines.push("  赠送：" + toNumber(b.granted).toFixed(2));
+    lines.push("  赠金：" + toNumber(b.granted).toFixed(2));
     lines.push("  充值：" + toNumber(b.toppedUp).toFixed(2));
     lines.push("");
   });
